@@ -1,0 +1,13 @@
+Stock Dashboard Export
+
+Files included:
+- index.html
+- styles.css
+- script.js
+- server.js
+- package.json
+- render.yaml
+- favicon.svg
+
+These are the latest local V2 files from Codex.
+Replace the matching files in the GitHub repo with these, then redeploy on Render.

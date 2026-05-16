@@ -1,26 +1,1890 @@
-const dollars=new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2});
-const compactDollars=new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',notation:'compact',maximumFractionDigits:2});
-const pct=new Intl.NumberFormat('en-US',{style:'percent',maximumFractionDigits:1});
-const scenarios=[{key:'bear',label:'Bear',color:'#b44747'},{key:'base',label:'Base',color:'#c79022'},{key:'bull',label:'Bull',color:'#12805c'}];
-const sample={ticker:'TSLA',currentPrice:175,revenue:97000,shares:3180,eps:2.75,years:7,bearGrowth:6,bearMargin:7,bearPe:24,bearDilution:1.5,baseGrowth:13,baseMargin:11,basePe:36,baseDilution:.5,bullGrowth:22,bullMargin:16,bullPe:55,bullDilution:-.5};
-const fields=['ticker','currentPrice','revenue','shares','eps','years','bearGrowth','bearMargin','bearPe','bearDilution','baseGrowth','baseMargin','basePe','baseDilution','bullGrowth','bullMargin','bullPe','bullDilution'];
-let lastProjection=null;const el=id=>document.getElementById(id);const numberValue=id=>Number(el(id).value)||0;
-function readProjectionInputs(){return{ticker:el('ticker').value.trim().toUpperCase()||'STOCK',currentPrice:numberValue('currentPrice'),revenue:numberValue('revenue'),shares:numberValue('shares'),eps:numberValue('eps'),years:Math.max(1,Math.min(15,numberValue('years'))),cases:Object.fromEntries(scenarios.map(s=>[s.key,{growth:numberValue(`${s.key}Growth`)/100,margin:numberValue(`${s.key}Margin`)/100,pe:numberValue(`${s.key}Pe`),dilution:numberValue(`${s.key}Dilution`)/100}]))}}
-function calculateProjection(input){return{input,cases:scenarios.map(s=>{const a=input.cases[s.key],yearly=[];for(let year=0;year<=input.years;year++){const revenue=input.revenue*Math.pow(1+a.growth,year),shares=input.shares*Math.pow(1+a.dilution,year),netIncome=revenue*a.margin,eps=shares>0?netIncome/shares:0,price=eps*a.pe;yearly.push({year,revenue,shares,netIncome,eps,price,returnMultiple:input.currentPrice>0?price/input.currentPrice:0})}const terminal=yearly[yearly.length-1],cagr=input.currentPrice>0?Math.pow(terminal.price/input.currentPrice,1/input.years)-1:0;return{...s,assumptions:a,yearly,terminal,cagr}})}}
-function renderProjection(result){lastProjection=result;el('projectionCards').innerHTML=result.cases.map(i=>`<article class="metric-card"><span>${i.label} case</span><strong>${dollars.format(i.terminal.price)}</strong><p>${pct.format(i.cagr)} annualized, ${i.terminal.returnMultiple.toFixed(2)}x return</p></article>`).join('');const base=result.cases.find(i=>i.key==='base');el('projectionDetails').innerHTML=[['Terminal revenue',compactDollars.format(base.terminal.revenue*1e6)],['Terminal net income',compactDollars.format(base.terminal.netIncome*1e6)],['Terminal EPS',dollars.format(base.terminal.eps)],['Terminal shares',`${base.terminal.shares.toFixed(0)}M`]].map(([l,v])=>`<article class="detail-card"><span>${l}</span><strong>${v}</strong></article>`).join('');drawLineChart(el('projectionChart'),result.cases,'price')}
-const formatMaybe=(value,formatter=dollars)=>value===null||value===undefined||value===''?'N/A':Number.isFinite(Number(value))?formatter.format(Number(value)):'N/A';const setDataStatus=m=>el('dataStatus').textContent=m;
-async function fetchStockData(symbol){const clean=String(symbol||'').trim().toUpperCase();if(!clean)throw new Error('Enter a ticker first.');const r=await fetch(`/api/stock/${encodeURIComponent(clean)}`),data=await r.json();if(!r.ok)throw new Error(data.error||'Could not fetch stock data.');return data}
-function renderStockDataCard(data){const asOf=data.timestamp?new Date(data.timestamp).toLocaleString():'latest available';el('stockDataCard').innerHTML=`<strong>${data.name||data.symbol} (${data.symbol})</strong><p>${data.source} quote as of ${asOf}. ${data.exchange||''} ${data.industry?`- ${data.industry}`:''}</p><div class="spec-grid"><div><span>Price</span><b>${formatMaybe(data.price)}</b></div><div><span>Market cap</span><b>${formatMaybe(data.marketCap,compactDollars)}</b></div><div><span>Shares out.</span><b>${data.sharesOutstanding?`${Number(data.sharesOutstanding).toFixed(0)}M`:'N/A'}</b></div><div><span>EPS TTM</span><b>${formatMaybe(data.eps)}</b></div><div><span>P/E</span><b>${data.peTtm?Number(data.peTtm).toFixed(1):'N/A'}</b></div><div><span>52W range</span><b>${formatMaybe(data.week52Low)} - ${formatMaybe(data.week52High)}</b></div></div>`}
-function applyStockDataToProjection(data){el('ticker').value=data.symbol;if(data.price)el('currentPrice').value=Number(data.price).toFixed(2);if(data.revenueTtm)el('revenue').value=Math.round(Number(data.revenueTtm));if(data.sharesOutstanding)el('shares').value=Math.round(Number(data.sharesOutstanding));if(data.eps)el('eps').value=Number(data.eps).toFixed(2);if(data.netMargin&&Number.isFinite(Number(data.netMargin))){const m=Math.max(0,Number(data.netMargin));el('bearMargin').value=Math.max(1,m*.72).toFixed(1);el('baseMargin').value=m.toFixed(1);el('bullMargin').value=(m*1.18).toFixed(1)}if(data.peTtm&&Number.isFinite(Number(data.peTtm))){const p=Math.max(1,Number(data.peTtm));el('bearPe').value=Math.max(5,p*.7).toFixed(1);el('basePe').value=p.toFixed(1);el('bullPe').value=(p*1.25).toFixed(1)}renderStockDataCard(data);setDataStatus(`${data.source} live`);runProjection()}
-async function fetchProjectionTicker(){const b=el('fetchTicker');b.disabled=true;b.textContent='Fetching...';setDataStatus('Fetching data');try{applyStockDataToProjection(await fetchStockData(el('ticker').value))}catch(e){setDataStatus('Data unavailable');el('stockDataCard').innerHTML=`<strong>Could not load data.</strong><p>${e.message}</p>`}finally{b.disabled=false;b.textContent='Fetch live data'}}
-function drawLineChart(canvas,series,field){const ctx=canvas.getContext('2d'),w=canvas.width,h=canvas.height,pad=46;ctx.clearRect(0,0,w,h);ctx.fillStyle='#fff';ctx.fillRect(0,0,w,h);const all=series.flatMap(i=>i.yearly.map(p=>p[field])),max=Math.max(...all,1)*1.12,years=series[0]?.yearly.length-1||1;ctx.strokeStyle='#dbe3de';ctx.lineWidth=1;ctx.font='13px Inter, sans-serif';ctx.fillStyle='#607069';for(let i=0;i<=4;i++){const y=pad+((h-pad*2)*i)/4;ctx.beginPath();ctx.moveTo(pad,y);ctx.lineTo(w-pad,y);ctx.stroke();ctx.fillText(dollars.format(max*(1-i/4)),8,y+4)}series.forEach(item=>{ctx.strokeStyle=item.color;ctx.lineWidth=3;ctx.beginPath();item.yearly.forEach((point,index)=>{const x=pad+((w-pad*2)*point.year)/years,y=h-pad-((h-pad*2)*point[field])/max;if(index===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)});ctx.stroke();const last=item.yearly[item.yearly.length-1],y=h-pad-((h-pad*2)*last[field])/max;ctx.fillStyle=item.color;ctx.fillText(item.label,Math.min(w-pad+8,w-42),y+4)});ctx.fillStyle='#607069';ctx.fillText('Today',pad,h-14);ctx.fillText(`Year ${years}`,w-pad-44,h-14)}
-function runProjection(){const r=calculateProjection(readProjectionInputs());renderProjection(r);return r}
-function runCompare(){const years=Math.max(1,Math.min(15,numberValue('compareYears'))),stocks=['A','B'].map((slot,index)=>{const ticker=el(`compare${slot}Ticker`).value.trim().toUpperCase()||`STOCK ${slot}`,price=Number(el(`compare${slot}Price`).value)||0,eps=Number(el(`compare${slot}Eps`).value)||0,growth=(Number(el(`compare${slot}Growth`).value)||0)/100,pe=Number(el(`compare${slot}Pe`).value)||0,yearly=[];for(let year=0;year<=years;year++)yearly.push({year,price:eps*Math.pow(1+growth,year)*pe});const terminal=yearly[yearly.length-1].price,cagr=price>0?Math.pow(terminal/price,1/years)-1:0;return{key:slot,label:ticker,color:index===0?'#356aa8':'#0e7a5f',yearly,terminal,cagr,returnMultiple:price>0?terminal/price:0}});el('compareCards').innerHTML=stocks.map(s=>`<article class="metric-card"><span>${s.label}</span><strong>${dollars.format(s.terminal)}</strong><p>${pct.format(s.cagr)} annualized, ${s.returnMultiple.toFixed(2)}x return</p></article>`).join('');drawLineChart(el('compareChart'),stocks,'price')}
-async function fetchCompareTickers(){const b=el('fetchCompare');b.disabled=true;b.textContent='Fetching...';try{const[a,c]=await Promise.all([fetchStockData(el('compareATicker').value),fetchStockData(el('compareBTicker').value)]);if(a.price)el('compareAPrice').value=Number(a.price).toFixed(2);if(a.eps)el('compareAEps').value=Number(a.eps).toFixed(2);if(a.peTtm)el('compareAPe').value=Number(a.peTtm).toFixed(1);if(c.price)el('compareBPrice').value=Number(c.price).toFixed(2);if(c.eps)el('compareBEps').value=Number(c.eps).toFixed(2);if(c.peTtm)el('compareBPe').value=Number(c.peTtm).toFixed(1);setDataStatus(`${a.source} live`);runCompare()}catch(e){setDataStatus('Compare fetch failed');alert(e.message)}finally{b.disabled=false;b.textContent='Fetch A & B'}}
-function saveProjection(){const r=lastProjection||runProjection(),base=r.cases.find(i=>i.key==='base'),saved=JSON.parse(localStorage.getItem('stockLabWatchlist')||'[]');saved.unshift({ticker:r.input.ticker,date:new Date().toLocaleDateString(),currentPrice:r.input.currentPrice,bear:r.cases[0].terminal.price,base:base.terminal.price,bull:r.cases[2].terminal.price,cagr:base.cagr});localStorage.setItem('stockLabWatchlist',JSON.stringify(saved.slice(0,24)));renderWatchlist()}
-function renderWatchlist(){const saved=JSON.parse(localStorage.getItem('stockLabWatchlist')||'[]');el('watchlistGrid').innerHTML=saved.map(i=>`<article class="watch-card"><h3>${i.ticker}</h3><p class="small-muted">Saved ${i.date} from ${dollars.format(i.currentPrice)}</p><dl><div><dt>Bear</dt><dd>${dollars.format(i.bear)}</dd></div><div><dt>Base</dt><dd>${dollars.format(i.base)}</dd></div><div><dt>Bull</dt><dd>${dollars.format(i.bull)}</dd></div><div><dt>Base CAGR</dt><dd>${pct.format(i.cagr)}</dd></div></dl></article>`).join('')||'<p class="small-muted">No saved projections yet.</p>'}
-function runReverse(){const price=numberValue('revPrice'),eps=numberValue('revEps'),pe=numberValue('revPe'),years=Math.max(1,numberValue('revYears')),growth=eps>0?Math.pow((pe>0?price/pe:0)/eps,1/years)-1:0;el('reverseAnswer').innerHTML=`<strong>${pct.format(growth)}</strong>annual EPS growth is implied by today's price at the selected exit multiple.`}
-function runMos(){const fairValue=numberValue('fairValue'),currentPrice=numberValue('mosPrice'),safety=numberValue('mosPercent')/100,buyBelow=fairValue*(1-safety),upside=currentPrice>0?fairValue/currentPrice-1:0;el('mosAnswer').innerHTML=`<strong>${dollars.format(buyBelow)}</strong>buy zone with ${pct.format(upside)} upside to fair value.`}
-function runSize(){const portfolio=numberValue('portfolioValue'),risk=numberValue('riskPercent')/100,entry=numberValue('entryPrice'),stop=numberValue('stopPrice'),dollarsAtRisk=portfolio*risk,perShareRisk=Math.max(entry-stop,0),shares=perShareRisk>0?Math.floor(dollarsAtRisk/perShareRisk):0;el('sizeAnswer').innerHTML=`<strong>${shares.toLocaleString()} shares</strong>${dollars.format(shares*entry)} position size, risking ${dollars.format(dollarsAtRisk)}.`}
-function bindEvents(){document.querySelectorAll('.tab').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));button.classList.add('active');el(button.dataset.tab).classList.add('active')}));el('projectionForm').addEventListener('submit',e=>{e.preventDefault();runProjection()});fields.forEach(f=>el(f).addEventListener('input',runProjection));el('loadSample').addEventListener('click',()=>{Object.entries(sample).forEach(([k,v])=>el(k).value=v);runProjection()});el('saveProjection').addEventListener('click',saveProjection);el('fetchTicker').addEventListener('click',fetchProjectionTicker);el('runCompare').addEventListener('click',runCompare);el('fetchCompare').addEventListener('click',fetchCompareTickers);el('runReverse').addEventListener('click',runReverse);el('runMos').addEventListener('click',runMos);el('runSize').addEventListener('click',runSize);el('clearWatchlist').addEventListener('click',()=>{localStorage.removeItem('stockLabWatchlist');renderWatchlist()});el('saveNotes').addEventListener('click',()=>localStorage.setItem('stockLabNotes',el('researchNotes').value));el('useCurrentForA').addEventListener('click',()=>{const input=readProjectionInputs();el('compareATicker').value=input.ticker;el('compareAPrice').value=input.currentPrice;el('compareAEps').value=input.eps;el('compareAGrowth').value=(input.cases.base.growth*100).toFixed(1);el('compareAPe').value=input.cases.base.pe;runCompare()})}
-function init(){el('currentDate').textContent=new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric',year:'numeric'});el('researchNotes').value=localStorage.getItem('stockLabNotes')||'';bindEvents();runProjection();runCompare();runReverse();runMos();runSize();renderWatchlist()}init();
+const dollars = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 2,
+});
+
+const compactDollars = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  notation: "compact",
+  maximumFractionDigits: 2,
+});
+
+const pct = new Intl.NumberFormat("en-US", {
+  style: "percent",
+  maximumFractionDigits: 1,
+});
+
+const wholeNumber = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 0,
+});
+
+const oneDecimal = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+});
+
+const scenarioConfig = [
+  { key: "bear", label: "Bear", color: "#ef6b73" },
+  { key: "base", label: "Base", color: "#f4b74e" },
+  { key: "bull", label: "Bull", color: "#3ecf8e" },
+];
+
+const storageKeys = {
+  watchlist: "stockLabWatchlistV2",
+  portfolio: "stockLabPortfolioV2",
+};
+
+const portfolioTemplate = {
+  trades: [],
+  holdings: [],
+};
+
+const requiredTradeColumns = [
+  "Date",
+  "Symbol",
+  "Asset",
+  "Sector",
+  "Side",
+  "Quantity",
+  "Trade Price",
+  "Fees",
+  "Account",
+  "Notes",
+];
+
+const requiredHoldingColumns = [
+  "Symbol",
+  "Asset",
+  "Sector",
+  "Quantity",
+  "Average Cost",
+  "Initial Value",
+  "Account",
+];
+
+const appState = {
+  lastProjection: null,
+  lastStockData: null,
+  projectionHistoryRange: "5y",
+  compareHistoryRange: "5y",
+  compareView: "historical",
+  watchlist: [],
+  compareHistorical: null,
+  portfolio: loadPortfolioState(),
+  charts: {},
+  activeTradeEditId: null,
+};
+
+const chartRegistry = {};
+
+const measurePlugin = {
+  id: "measureOverlay",
+  afterDatasetsDraw(chart) {
+    const interaction = chart.$interaction;
+    if (!interaction || !interaction.measureStart || !interaction.measureEnd) {
+      return;
+    }
+
+    const ctx = chart.ctx;
+    const area = chart.chartArea;
+    const xScale = chart.scales.x;
+    const yScale = chart.scales.y;
+    const left = xScale.getPixelForValue(interaction.measureStart.xValue);
+    const right = xScale.getPixelForValue(interaction.measureEnd.xValue);
+    const activeDataset = chart.data.datasets[interaction.measureDatasetIndex] || chart.data.datasets[0];
+    const topValue = Math.max(interaction.measureStart.yValue, interaction.measureEnd.yValue);
+    const topPixel = yScale ? yScale.getPixelForValue(topValue) : area.top;
+    const minX = Math.min(left, right);
+    const width = Math.abs(right - left);
+    const fill = activeDataset?.borderColor || "#4f8cff";
+
+    ctx.save();
+    ctx.fillStyle = "rgba(79, 140, 255, 0.12)";
+    ctx.strokeStyle = fill;
+    ctx.lineWidth = 1.2;
+    ctx.fillRect(minX, area.top, width, area.bottom - area.top);
+    ctx.beginPath();
+    ctx.moveTo(left, area.top);
+    ctx.lineTo(left, area.bottom);
+    ctx.moveTo(right, area.top);
+    ctx.lineTo(right, area.bottom);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(12, 18, 28, 0.95)";
+    ctx.strokeStyle = fill;
+    const label = interaction.measureLabel || "";
+    const labelWidth = Math.max(70, Math.min(260, ctx.measureText(label).width + 18));
+    const labelX = Math.min(Math.max(minX + 6, area.left + 6), area.right - labelWidth - 6);
+    const labelY = Math.max(area.top + 6, topPixel - 30);
+    roundRect(ctx, labelX, labelY, labelWidth, 24, 6, true, true);
+    ctx.fillStyle = "#e9f1ff";
+    ctx.font = "12px IBM Plex Sans";
+    ctx.fillText(label, labelX + 9, labelY + 16);
+    ctx.restore();
+  },
+};
+
+const zoomPlugin = window.ChartZoom || window["chartjs-plugin-zoom"] || window.zoomPlugin;
+
+if (window.Chart) {
+  Chart.register(measurePlugin);
+  if (zoomPlugin) {
+    Chart.register(zoomPlugin);
+  }
+}
+
+function el(id) {
+  return document.getElementById(id);
+}
+
+function roundRect(ctx, x, y, width, height, radius, fill, stroke) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  if (fill) ctx.fill();
+  if (stroke) ctx.stroke();
+}
+
+function numberValue(id) {
+  return Number(el(id)?.value) || 0;
+}
+
+function safeText(value, fallback = "N/A") {
+  return value || fallback;
+}
+
+function formatDate(value) {
+  if (!value) return "N/A";
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function formatPercent(value) {
+  return Number.isFinite(value) ? pct.format(value) : "N/A";
+}
+
+function formatDollarValue(value) {
+  return Number.isFinite(value) ? dollars.format(value) : "N/A";
+}
+
+function formatCompactDollarValue(value) {
+  return Number.isFinite(value) ? compactDollars.format(value) : "N/A";
+}
+
+function formatMillionsAsShares(millions) {
+  if (!Number.isFinite(millions)) return "N/A";
+  if (millions >= 1000) {
+    return `${oneDecimal.format(millions / 1000)}B`;
+  }
+  return `${oneDecimal.format(millions)}M`;
+}
+
+function classForValue(value) {
+  if (!Number.isFinite(value) || value === 0) return "";
+  return value > 0 ? "value-positive" : "value-negative";
+}
+
+function setDataStatus(message) {
+  el("dataStatus").textContent = message;
+}
+
+function setInlineStatus(id, message, tone = "neutral") {
+  const node = el(id);
+  if (!node) return;
+  node.textContent = message;
+  node.className = "inline-status";
+  if (tone === "positive") {
+    node.classList.add("value-positive");
+  } else if (tone === "negative") {
+    node.classList.add("value-negative");
+  }
+}
+
+function parseJsonStorage(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function loadPortfolioState() {
+  const stored = parseJsonStorage(storageKeys.portfolio, null);
+  if (!stored) return structuredClone(portfolioTemplate);
+  return {
+    trades: Array.isArray(stored.trades) ? stored.trades : [],
+    holdings: Array.isArray(stored.holdings) ? stored.holdings : [],
+  };
+}
+
+function persistPortfolioState() {
+  localStorage.setItem(storageKeys.portfolio, JSON.stringify(appState.portfolio));
+}
+
+function persistWatchlist() {
+  localStorage.setItem(storageKeys.watchlist, JSON.stringify(appState.watchlist));
+}
+
+function loadWatchlist() {
+  appState.watchlist = parseJsonStorage(storageKeys.watchlist, []);
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "Request failed.");
+  }
+  return data;
+}
+
+async function fetchStockData(symbol) {
+  const clean = String(symbol || "").trim().toUpperCase();
+  if (!clean) throw new Error("Enter a ticker first.");
+  return fetchJson(`/api/stock/${encodeURIComponent(clean)}`);
+}
+
+async function fetchHistoricalData(symbol, range = "5y") {
+  const clean = String(symbol || "").trim().toUpperCase();
+  if (!clean) throw new Error("Enter a ticker first.");
+  return fetchJson(`/api/stock/${encodeURIComponent(clean)}/history?range=${encodeURIComponent(range)}`);
+}
+
+function readProjectionInputs() {
+  return {
+    ticker: el("ticker").value.trim().toUpperCase() || "STOCK",
+    currentPrice: numberValue("currentPrice"),
+    revenue: numberValue("revenue"),
+    shares: numberValue("shares"),
+    eps: numberValue("eps"),
+    years: Math.max(1, Math.min(15, numberValue("years"))),
+    cases: Object.fromEntries(
+      scenarioConfig.map((scenario) => [
+        scenario.key,
+        {
+          growth: numberValue(`${scenario.key}Growth`) / 100,
+          margin: numberValue(`${scenario.key}Margin`) / 100,
+          pe: numberValue(`${scenario.key}Pe`),
+          dilution: numberValue(`${scenario.key}Dilution`) / 100,
+        },
+      ]),
+    ),
+  };
+}
+
+function calculateProjection(input) {
+  const cases = scenarioConfig.map((scenario) => {
+    const assumptions = input.cases[scenario.key];
+    const yearly = [];
+    for (let year = 0; year <= input.years; year += 1) {
+      const revenue = input.revenue * Math.pow(1 + assumptions.growth, year);
+      const shares = input.shares * Math.pow(1 + assumptions.dilution, year);
+      const netIncome = revenue * assumptions.margin;
+      const eps = shares > 0 ? netIncome / shares : 0;
+      const price = eps * assumptions.pe;
+      const returnMultiple = input.currentPrice > 0 ? price / input.currentPrice : 0;
+      yearly.push({
+        x: year,
+        y: price,
+        year,
+        revenue,
+        shares,
+        netIncome,
+        eps,
+        price,
+        returnMultiple,
+      });
+    }
+    const terminal = yearly[yearly.length - 1];
+    const cagr =
+      input.currentPrice > 0 && terminal.price > 0
+        ? Math.pow(terminal.price / input.currentPrice, 1 / input.years) - 1
+        : 0;
+    return { ...scenario, assumptions, yearly, terminal, cagr };
+  });
+  return { input, cases };
+}
+
+function projectionMetrics(base) {
+  return [
+    ["Terminal revenue", formatCompactDollarValue(base.terminal.revenue * 1_000_000)],
+    ["Terminal net income", formatCompactDollarValue(base.terminal.netIncome * 1_000_000)],
+    ["Terminal EPS", formatDollarValue(base.terminal.eps)],
+    ["Terminal shares", formatMillionsAsShares(base.terminal.shares)],
+  ];
+}
+
+function renderProjection(result) {
+  appState.lastProjection = result;
+  el("projectionCards").innerHTML = result.cases
+    .map(
+      (item) => `
+        <article class="metric-card">
+          <span>${item.label} case</span>
+          <strong>${formatDollarValue(item.terminal.price)}</strong>
+          <p>${formatPercent(item.cagr)} annualized, ${item.terminal.returnMultiple.toFixed(2)}x ending value</p>
+        </article>
+      `,
+    )
+    .join("");
+
+  const base = result.cases.find((item) => item.key === "base");
+  el("projectionDetails").innerHTML = projectionMetrics(base)
+    .map(
+      ([label, value]) => `
+        <article class="detail-card">
+          <span>${label}</span>
+          <strong>${value}</strong>
+        </article>
+      `,
+    )
+    .join("");
+
+  drawProjectionForwardChart(result);
+}
+
+function renderStockDataCard(data) {
+  el("stockDataCard").innerHTML = `
+    <strong>${safeText(data.name, data.symbol)} (${data.symbol})</strong>
+    <p>${safeText(data.exchange, "Primary listing")} ${data.sector ? `| ${data.sector}` : ""} ${data.industry ? `| ${data.industry}` : ""}</p>
+    <div class="spec-grid">
+      <div><span>Price</span><b>${formatDollarValue(data.price)}</b></div>
+      <div><span>Market cap</span><b>${formatCompactDollarValue(data.marketCap)}</b></div>
+      <div><span>Shares out.</span><b>${formatMillionsAsShares(data.sharesOutstanding)}</b></div>
+      <div><span>EPS TTM</span><b>${formatDollarValue(data.eps)}</b></div>
+      <div><span>P/E</span><b>${Number.isFinite(data.peTtm) ? oneDecimal.format(data.peTtm) : "N/A"}</b></div>
+      <div><span>52W range</span><b>${formatDollarValue(data.week52Low)} - ${formatDollarValue(data.week52High)}</b></div>
+      <div><span>Revenue TTM</span><b>${formatCompactDollarValue(Number(data.revenueTtm) * 1_000_000)}</b></div>
+      <div><span>Net margin</span><b>${Number.isFinite(data.netMargin) ? `${oneDecimal.format(data.netMargin)}%` : "N/A"}</b></div>
+    </div>
+  `;
+}
+
+function applyStockDataToProjection(data) {
+  appState.lastStockData = data;
+  el("ticker").value = data.symbol;
+  if (Number.isFinite(data.price)) el("currentPrice").value = Number(data.price).toFixed(2);
+  if (Number.isFinite(data.revenueTtm)) el("revenue").value = Math.round(data.revenueTtm);
+  if (Number.isFinite(data.sharesOutstanding)) el("shares").value = Math.round(data.sharesOutstanding);
+  if (Number.isFinite(data.eps)) el("eps").value = Number(data.eps).toFixed(2);
+  if (Number.isFinite(data.netMargin)) {
+    const margin = Math.max(0, Number(data.netMargin));
+    el("bearMargin").value = Math.max(1, margin * 0.7).toFixed(1);
+    el("baseMargin").value = margin.toFixed(1);
+    el("bullMargin").value = Math.max(margin * 1.15, margin + 2).toFixed(1);
+  }
+  if (Number.isFinite(data.peTtm)) {
+    const pe = Math.max(5, Number(data.peTtm));
+    el("bearPe").value = Math.max(8, pe * 0.75).toFixed(1);
+    el("basePe").value = pe.toFixed(1);
+    el("bullPe").value = Math.max(pe * 1.15, pe + 3).toFixed(1);
+  }
+  renderStockDataCard(data);
+  setDataStatus(`${data.source || "Market"} data loaded`);
+}
+
+async function fetchProjectionTicker() {
+  const button = el("fetchTicker");
+  button.disabled = true;
+  button.textContent = "Fetching...";
+  setDataStatus("Fetching live data");
+  try {
+    const data = await fetchStockData(el("ticker").value);
+    applyStockDataToProjection(data);
+    runProjection();
+    await loadProjectionHistoricalChart(data.symbol, appState.projectionHistoryRange);
+  } catch (error) {
+    setDataStatus("Data unavailable");
+    el("stockDataCard").innerHTML = `<strong>Could not load data.</strong><p>${error.message}</p>`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Fetch live data";
+  }
+}
+
+function buildBaseChartOptions({ yAxisLabelPrefix = "", readoutId, xTime = false, mode = "measure" }) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: {
+      mode: "nearest",
+      intersect: false,
+    },
+    scales: {
+      x: xTime
+        ? {
+            type: "time",
+            time: {
+              tooltipFormat: "MMM d, yyyy",
+            },
+            ticks: {
+              color: "#92a8c5",
+              maxRotation: 0,
+            },
+            grid: {
+              color: "rgba(36, 52, 75, 0.55)",
+            },
+          }
+        : {
+            type: "linear",
+            ticks: {
+              color: "#92a8c5",
+              precision: 0,
+            },
+            grid: {
+              color: "rgba(36, 52, 75, 0.55)",
+            },
+          },
+      y: {
+        ticks: {
+          color: "#92a8c5",
+          callback(value) {
+            return `${yAxisLabelPrefix}${Number(value).toLocaleString()}`;
+          },
+        },
+        grid: {
+          color: "rgba(36, 52, 75, 0.55)",
+        },
+      },
+    },
+    plugins: {
+      legend: {
+        labels: {
+          color: "#dce9ff",
+        },
+      },
+      tooltip: {
+        callbacks: {
+          label(context) {
+            const label = context.dataset.label ? `${context.dataset.label}: ` : "";
+            const value = context.parsed.y;
+            return `${label}${formatDollarValue(value)}`;
+          },
+        },
+      },
+      zoom: {
+        pan: {
+          enabled: mode === "pan",
+          mode: "x",
+        },
+        zoom: {
+          wheel: {
+            enabled: mode === "pan",
+          },
+          pinch: {
+            enabled: mode === "pan",
+          },
+          drag: {
+            enabled: false,
+          },
+          mode: "x",
+        },
+      },
+    },
+    elements: {
+      point: {
+        radius: 0,
+        hitRadius: 18,
+        hoverRadius: 4,
+      },
+      line: {
+        tension: 0.2,
+      },
+    },
+    onClick(event, elements, chart) {
+      if (!elements.length) return;
+      const first = elements[0];
+      const point = chart.data.datasets[first.datasetIndex].data[first.index];
+      const xText = xTime ? formatDate(point.x) : `Year ${point.x}`;
+      setChartReadout(readoutId, `${chart.data.datasets[first.datasetIndex].label}: ${xText} | ${formatDollarValue(point.y)}`);
+    },
+  };
+}
+
+function destroyChart(chartKey) {
+  const existing = appState.charts[chartKey];
+  if (existing?.chart) {
+    existing.chart.destroy();
+  }
+  delete appState.charts[chartKey];
+}
+
+function setChartReadout(readoutId, message) {
+  const node = el(readoutId);
+  if (node) node.textContent = message;
+}
+
+function pointDistance(a, b) {
+  return Math.abs(Number(a) - Number(b));
+}
+
+function findNearestDataPoint(chart, event) {
+  const area = chart.chartArea;
+  if (!area) return null;
+
+  const position = Chart.helpers.getRelativePosition(event, chart);
+  if (
+    position.x < area.left ||
+    position.x > area.right ||
+    position.y < area.top ||
+    position.y > area.bottom
+  ) {
+    return null;
+  }
+
+  const xScale = chart.scales.x;
+  const xValue = xScale.getValueForPixel(position.x);
+  let nearest = null;
+
+  chart.data.datasets.forEach((dataset, datasetIndex) => {
+    dataset.data.forEach((point, index) => {
+      const distance = pointDistance(point.x, xValue);
+      if (!nearest || distance < nearest.distance) {
+        nearest = { dataset, datasetIndex, point, index, distance };
+      }
+    });
+  });
+
+  return nearest;
+}
+
+function attachMeasureHandlers(chartKey) {
+  const bundle = appState.charts[chartKey];
+  if (!bundle?.chart) return;
+  const { chart, readoutId, xFormatter } = bundle;
+  const canvas = chart.canvas;
+  if (!canvas) return;
+
+  if (bundle.cleanupMeasure) {
+    bundle.cleanupMeasure();
+  }
+
+  let dragging = false;
+
+  const mouseDown = (event) => {
+    event.preventDefault();
+    if (bundle.mode !== "measure") return;
+    const nearest = findNearestDataPoint(chart, event);
+    if (!nearest) return;
+    dragging = true;
+    chart.$interaction = {
+      measureStart: { xValue: nearest.point.x, yValue: nearest.point.y },
+      measureEnd: { xValue: nearest.point.x, yValue: nearest.point.y },
+      measureDatasetIndex: nearest.datasetIndex,
+      measureLabel: "",
+    };
+    chart.update("none");
+  };
+
+  const mouseMove = (event) => {
+    const nearest = findNearestDataPoint(chart, event);
+    if (nearest && !dragging) {
+      setChartReadout(readoutId, `${nearest.dataset.label}: ${xFormatter(nearest.point.x)} | ${formatDollarValue(nearest.point.y)}`);
+    }
+    if (!dragging || bundle.mode !== "measure") return;
+    const current = findNearestDataPoint(chart, event);
+    if (!current) return;
+    const start = chart.$interaction.measureStart;
+    const delta = current.point.y - start.yValue;
+    const percentChange = start.yValue !== 0 ? delta / start.yValue : 0;
+    chart.$interaction.measureEnd = { xValue: current.point.x, yValue: current.point.y };
+    chart.$interaction.measureDatasetIndex = current.datasetIndex;
+    chart.$interaction.measureLabel = `${xFormatter(start.xValue)} to ${xFormatter(current.point.x)} | ${formatDollarValue(delta)} (${formatPercent(percentChange)})`;
+    setChartReadout(readoutId, chart.$interaction.measureLabel);
+    chart.update("none");
+  };
+
+  const mouseUp = (event) => {
+    const nearest = findNearestDataPoint(chart, event);
+    if (nearest) {
+      setChartReadout(readoutId, `${nearest.dataset.label}: ${xFormatter(nearest.point.x)} | ${formatDollarValue(nearest.point.y)}`);
+    }
+    dragging = false;
+  };
+
+  const mouseLeave = () => {
+    dragging = false;
+  };
+
+  const clickHandler = (event) => {
+    const nearest = findNearestDataPoint(chart, event);
+    if (!nearest) return;
+    setChartReadout(readoutId, `${nearest.dataset.label}: ${xFormatter(nearest.point.x)} | ${formatDollarValue(nearest.point.y)}`);
+  };
+
+  canvas.style.cursor = bundle.mode === "pan" ? "grab" : "crosshair";
+  canvas.addEventListener("pointerdown", mouseDown);
+  canvas.addEventListener("pointermove", mouseMove);
+  canvas.addEventListener("pointerup", mouseUp);
+  canvas.addEventListener("pointerleave", mouseLeave);
+  canvas.addEventListener("click", clickHandler);
+
+  bundle.cleanupMeasure = () => {
+    canvas.removeEventListener("pointerdown", mouseDown);
+    canvas.removeEventListener("pointermove", mouseMove);
+    canvas.removeEventListener("pointerup", mouseUp);
+    canvas.removeEventListener("pointerleave", mouseLeave);
+    canvas.removeEventListener("click", clickHandler);
+  };
+}
+
+function createLineChart(chartKey, canvasId, config) {
+  destroyChart(chartKey);
+  const ctx = el(canvasId).getContext("2d");
+  const options = buildBaseChartOptions(config);
+  const chart = new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: config.datasets,
+    },
+    options,
+  });
+
+  appState.charts[chartKey] = {
+    chart,
+    mode: config.mode || "measure",
+    readoutId: config.readoutId,
+    xFormatter: config.xFormatter,
+    isTimeSeries: config.xTime,
+  };
+  chart.$interaction = null;
+  attachMeasureHandlers(chartKey);
+  return chart;
+}
+
+function updateChartMode(chartKey, mode) {
+  const bundle = appState.charts[chartKey];
+  if (!bundle?.chart) return;
+  bundle.mode = mode;
+  if (bundle.chart.canvas) {
+    bundle.chart.canvas.style.cursor = mode === "pan" ? "grab" : "crosshair";
+  }
+  bundle.chart.options.plugins.zoom.pan.enabled = mode === "pan";
+  bundle.chart.options.plugins.zoom.zoom.wheel.enabled = mode === "pan";
+  bundle.chart.options.plugins.zoom.zoom.pinch.enabled = mode === "pan";
+  if (mode !== "measure") {
+    bundle.chart.$interaction = null;
+  }
+  bundle.chart.update("none");
+}
+
+function resetChartView(chartKey) {
+  const bundle = appState.charts[chartKey];
+  if (!bundle?.chart) return;
+  if (typeof bundle.chart.resetZoom === "function") {
+    bundle.chart.resetZoom();
+  }
+  bundle.chart.$interaction = null;
+  bundle.chart.update("none");
+}
+
+function drawProjectionForwardChart(result) {
+  createLineChart("projectionForward", "projectionForwardChart", {
+    readoutId: "projectionForwardReadout",
+    xFormatter: (value) => `Year ${value}`,
+    datasets: result.cases.map((item) => ({
+      label: item.label,
+      borderColor: item.color,
+      backgroundColor: `${item.color}33`,
+      data: item.yearly.map((point) => ({ x: point.year, y: point.price })),
+      pointRadius: 2,
+      pointHoverRadius: 4,
+      borderWidth: 2.5,
+      fill: false,
+    })),
+  });
+  setChartReadout("projectionForwardReadout", "Forward projection details will appear here.");
+}
+
+async function loadProjectionHistoricalChart(symbol, range = "5y") {
+  const history = await fetchHistoricalData(symbol, range);
+  createLineChart("projectionHistorical", "projectionHistoricalChart", {
+    readoutId: "projectionHistoricalReadout",
+    xFormatter: (value) => formatDate(value),
+    xTime: true,
+    datasets: [
+      {
+        label: `${history.symbol} price`,
+        borderColor: "#4f8cff",
+        backgroundColor: "rgba(79, 140, 255, 0.18)",
+        data: history.points.map((point) => ({ x: point.date, y: point.close })),
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+    ],
+  });
+  setChartReadout(
+    "projectionHistoricalReadout",
+    `${history.symbol} ${history.rangeLabel} history loaded. Click or drag to inspect exact points.`,
+  );
+}
+
+function buildCompareProjectionData() {
+  const years = Math.max(1, Math.min(15, numberValue("compareYears")));
+  return ["A", "B"].map((slot, index) => {
+    const ticker = el(`compare${slot}Ticker`).value.trim().toUpperCase() || `STOCK ${slot}`;
+    const price = numberValue(`compare${slot}Price`);
+    const eps = numberValue(`compare${slot}Eps`);
+    const growth = numberValue(`compare${slot}Growth`) / 100;
+    const pe = numberValue(`compare${slot}Pe`);
+    const yearly = [];
+    for (let year = 0; year <= years; year += 1) {
+      const futureEps = eps * Math.pow(1 + growth, year);
+      const futurePrice = futureEps * pe;
+      yearly.push({ x: year, y: futurePrice, year, price: futurePrice });
+    }
+    const terminal = yearly[yearly.length - 1].y;
+    const cagr = price > 0 && terminal > 0 ? Math.pow(terminal / price, 1 / years) - 1 : 0;
+    return {
+      key: slot,
+      label: ticker,
+      color: index === 0 ? "#4f8cff" : "#3ecf8e",
+      yearly,
+      terminal,
+      cagr,
+      returnMultiple: price > 0 ? terminal / price : 0,
+      currentPrice: price,
+    };
+  });
+}
+
+function runCompare() {
+  const stocks = buildCompareProjectionData();
+  el("compareCards").innerHTML = stocks
+    .map(
+      (stock) => `
+        <article class="metric-card">
+          <span>${stock.label}</span>
+          <strong>${formatDollarValue(stock.terminal)}</strong>
+          <p>${formatPercent(stock.cagr)} annualized, ${stock.returnMultiple.toFixed(2)}x ending value</p>
+        </article>
+      `,
+    )
+    .join("");
+
+  createLineChart("compareForward", "compareForwardChart", {
+    readoutId: "compareForwardReadout",
+    xFormatter: (value) => `Year ${value}`,
+    datasets: stocks.map((stock) => ({
+      label: stock.label,
+      borderColor: stock.color,
+      backgroundColor: `${stock.color}33`,
+      data: stock.yearly,
+      pointRadius: 2,
+      pointHoverRadius: 4,
+      borderWidth: 2.4,
+    })),
+  });
+
+  setChartReadout("compareForwardReadout", "Forward comparison details will appear here.");
+  appState.compareForward = stocks;
+}
+
+async function fetchCompareTickers() {
+  const button = el("fetchCompare");
+  button.disabled = true;
+  button.textContent = "Fetching...";
+  try {
+    const [a, b] = await Promise.all([
+      fetchStockData(el("compareATicker").value),
+      fetchStockData(el("compareBTicker").value),
+    ]);
+
+    fillCompareSlot("A", a);
+    fillCompareSlot("B", b);
+    await loadCompareHistoricalChart(appState.compareHistoryRange);
+    setDataStatus("Compare data loaded");
+    runCompare();
+  } catch (error) {
+    setDataStatus("Compare fetch failed");
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Fetch A & B";
+  }
+}
+
+function fillCompareSlot(slot, data) {
+  el(`compare${slot}Ticker`).value = data.symbol;
+  if (Number.isFinite(data.price)) el(`compare${slot}Price`).value = data.price.toFixed(2);
+  if (Number.isFinite(data.eps)) el(`compare${slot}Eps`).value = data.eps.toFixed(2);
+  if (Number.isFinite(data.peTtm)) el(`compare${slot}Pe`).value = data.peTtm.toFixed(1);
+}
+
+async function loadCompareHistoricalChart(range = "5y") {
+  const tickerA = el("compareATicker").value.trim().toUpperCase();
+  const tickerB = el("compareBTicker").value.trim().toUpperCase();
+  const [a, b] = await Promise.all([fetchHistoricalData(tickerA, range), fetchHistoricalData(tickerB, range)]);
+  appState.compareHistorical = { a, b };
+
+  const normalize = (points) => {
+    const first = points.find((point) => Number.isFinite(point.close))?.close || 1;
+    return points.map((point) => ({
+      x: point.date,
+      y: (point.close / first) * 100,
+      close: point.close,
+    }));
+  };
+
+  createLineChart("compareHistorical", "compareHistoricalChart", {
+    readoutId: "compareHistoricalReadout",
+    xFormatter: (value) => formatDate(value),
+    xTime: true,
+    datasets: [
+      {
+        label: `${a.symbol} indexed`,
+        borderColor: "#4f8cff",
+        backgroundColor: "rgba(79, 140, 255, 0.18)",
+        data: normalize(a.points),
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+      {
+        label: `${b.symbol} indexed`,
+        borderColor: "#3ecf8e",
+        backgroundColor: "rgba(62, 207, 142, 0.16)",
+        data: normalize(b.points),
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+    ],
+  });
+
+  const chart = appState.charts.compareHistorical?.chart;
+  if (chart) {
+    chart.options.scales.y.ticks.callback = (value) => `${value.toFixed(0)}`;
+    chart.options.plugins.tooltip.callbacks.label = (context) =>
+      `${context.dataset.label}: ${context.parsed.y.toFixed(1)} indexed`;
+    chart.update("none");
+  }
+
+  setChartReadout(
+    "compareHistoricalReadout",
+    `${a.symbol} and ${b.symbol} ${a.rangeLabel} history loaded and normalized to 100 at the starting point.`,
+  );
+}
+
+function saveProjection() {
+  const result = appState.lastProjection || runProjection();
+  const base = result.cases.find((item) => item.key === "base");
+  const existingIndex = appState.watchlist.findIndex((item) => item.ticker === result.input.ticker);
+  const payload = {
+    ticker: result.input.ticker,
+    savedAt: new Date().toISOString(),
+    currentPrice: result.input.currentPrice,
+    bear: result.cases.find((item) => item.key === "bear")?.terminal.price || 0,
+    base: base.terminal.price,
+    bull: result.cases.find((item) => item.key === "bull")?.terminal.price || 0,
+    baseCagr: base.cagr,
+    years: result.input.years,
+    inputs: serializeProjectionInputs(),
+  };
+
+  if (existingIndex >= 0) {
+    appState.watchlist.splice(existingIndex, 1, payload);
+  } else {
+    appState.watchlist.unshift(payload);
+  }
+  appState.watchlist = appState.watchlist.slice(0, 40);
+  persistWatchlist();
+  renderWatchlist();
+  setInlineStatus("projectionSaveStatus", `${payload.ticker} saved to watchlist.`, "positive");
+}
+
+function serializeProjectionInputs() {
+  const values = {};
+  [
+    "ticker",
+    "currentPrice",
+    "revenue",
+    "shares",
+    "eps",
+    "years",
+    "bearGrowth",
+    "bearMargin",
+    "bearPe",
+    "bearDilution",
+    "baseGrowth",
+    "baseMargin",
+    "basePe",
+    "baseDilution",
+    "bullGrowth",
+    "bullMargin",
+    "bullPe",
+    "bullDilution",
+  ].forEach((id) => {
+    values[id] = el(id).value;
+  });
+  return values;
+}
+
+function restoreProjectionInputs(values) {
+  Object.entries(values || {}).forEach(([id, value]) => {
+    if (el(id)) {
+      el(id).value = value;
+    }
+  });
+}
+
+function renderWatchlist() {
+  const container = el("watchlistGrid");
+  if (!appState.watchlist.length) {
+    container.innerHTML = '<div class="empty-state">No saved projections yet. Save one from the Projection tab and it will show up here.</div>';
+    return;
+  }
+
+  container.innerHTML = appState.watchlist
+    .map(
+      (item, index) => `
+        <article class="watch-card">
+          <h3>${item.ticker}</h3>
+          <p class="small-muted">Saved ${formatDate(item.savedAt)} from ${formatDollarValue(item.currentPrice)}</p>
+          <dl>
+            <div><dt>Bear</dt><dd>${formatDollarValue(item.bear)}</dd></div>
+            <div><dt>Base</dt><dd>${formatDollarValue(item.base)}</dd></div>
+            <div><dt>Bull</dt><dd>${formatDollarValue(item.bull)}</dd></div>
+            <div><dt>Base CAGR</dt><dd>${formatPercent(item.baseCagr)}</dd></div>
+          </dl>
+          <div class="watch-actions">
+            <button class="tiny-button" type="button" data-watch-action="load" data-watch-index="${index}">Load</button>
+            <button class="tiny-button danger" type="button" data-watch-action="delete" data-watch-index="${index}">Delete</button>
+          </div>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function runReverse() {
+  const price = numberValue("revPrice");
+  const eps = numberValue("revEps");
+  const pe = numberValue("revPe");
+  const years = Math.max(1, numberValue("revYears"));
+  const impliedFutureEps = pe > 0 ? price / pe : 0;
+  const growth = eps > 0 && impliedFutureEps > 0 ? Math.pow(impliedFutureEps / eps, 1 / years) - 1 : 0;
+  el("reverseAnswer").innerHTML = `
+    <strong>${formatPercent(growth)}</strong>
+    The current price implies roughly ${formatPercent(growth)} annual EPS growth for the next ${years} year${years === 1 ? "" : "s"} if the stock exits at ${pe.toFixed(1)}x earnings.
+  `;
+}
+
+function runMos() {
+  const fairValue = numberValue("fairValue");
+  const currentPrice = numberValue("mosPrice");
+  const safety = numberValue("mosPercent") / 100;
+  const buyBelow = fairValue * (1 - safety);
+  const upside = currentPrice > 0 ? fairValue / currentPrice - 1 : 0;
+  el("mosAnswer").innerHTML = `
+    <strong>${formatDollarValue(buyBelow)}</strong>
+    If your fair value estimate is ${formatDollarValue(fairValue)}, a ${wholeNumber.format(safety * 100)}% margin of safety means your buy zone is ${formatDollarValue(buyBelow)} or below. That leaves ${formatPercent(upside)} upside to fair value from the current price.
+  `;
+}
+
+function runSize() {
+  const portfolio = numberValue("portfolioValue");
+  const risk = numberValue("riskPercent") / 100;
+  const entry = numberValue("entryPrice");
+  const stop = numberValue("stopPrice");
+  const dollarsAtRisk = portfolio * risk;
+  const perShareRisk = Math.max(entry - stop, 0);
+  const shares = perShareRisk > 0 ? Math.floor(dollarsAtRisk / perShareRisk) : 0;
+  const position = shares * entry;
+  el("sizeAnswer").innerHTML = `
+    <strong>${wholeNumber.format(shares)} shares</strong>
+    That position would be about ${formatDollarValue(position)} in capital, with roughly ${formatDollarValue(dollarsAtRisk)} at risk if your stop is hit.
+  `;
+}
+
+function calculateSp500Projection() {
+  const start = numberValue("spStart");
+  const monthly = numberValue("spMonthly");
+  const annualRate = numberValue("spRate") / 100;
+  const years = Math.max(1, Math.min(50, numberValue("spYears")));
+  const monthlyRate = annualRate / 12;
+
+  let current = start;
+  let totalContributed = start;
+  let totalGrowth = 0;
+  const yearlyRows = [];
+  const chartPoints = [{ x: 0, y: start }];
+
+  for (let year = 1; year <= years; year += 1) {
+    const startValue = current;
+    let contributionsThisYear = 0;
+    for (let month = 0; month < 12; month += 1) {
+      current = current * (1 + monthlyRate) + monthly;
+      contributionsThisYear += monthly;
+    }
+    totalContributed += contributionsThisYear;
+    totalGrowth = current - totalContributed;
+    yearlyRows.push({
+      year,
+      startValue,
+      contributions: contributionsThisYear,
+      growth: current - startValue - contributionsThisYear,
+      endingValue: current,
+    });
+    chartPoints.push({ x: year, y: current });
+  }
+
+  return {
+    start,
+    monthly,
+    annualRate,
+    years,
+    totalContributed,
+    totalGrowth,
+    endingValue: current,
+    yearlyRows,
+    chartPoints,
+  };
+}
+
+function renderSp500() {
+  const result = calculateSp500Projection();
+  el("sp500Cards").innerHTML = [
+    ["Ending value", formatDollarValue(result.endingValue), `${result.years} year ending balance`],
+    ["Total contributions", formatDollarValue(result.totalContributed), "Starting amount plus monthly adds"],
+    ["Total growth", formatDollarValue(result.totalGrowth), `${formatPercent(result.totalGrowth / Math.max(result.totalContributed, 1))} over contributions`],
+  ]
+    .map(
+      ([label, value, copy]) => `
+        <article class="metric-card">
+          <span>${label}</span>
+          <strong>${value}</strong>
+          <p>${copy}</p>
+        </article>
+      `,
+    )
+    .join("");
+
+  el("sp500Table").innerHTML = result.yearlyRows
+    .map(
+      (row) => `
+        <tr>
+          <td>${row.year}</td>
+          <td>${formatDollarValue(row.startValue)}</td>
+          <td>${formatDollarValue(row.contributions)}</td>
+          <td>${formatDollarValue(row.growth)}</td>
+          <td>${formatDollarValue(row.endingValue)}</td>
+        </tr>
+      `,
+    )
+    .join("");
+
+  createLineChart("sp500Chart", "sp500ChartCanvas", {
+    readoutId: "sp500Readout",
+    xFormatter: (value) => `Year ${value}`,
+    datasets: [
+      {
+        label: "Portfolio value",
+        borderColor: "#4f8cff",
+        backgroundColor: "rgba(79, 140, 255, 0.18)",
+        data: result.chartPoints,
+        pointRadius: 2,
+        pointHoverRadius: 4,
+        borderWidth: 2.5,
+      },
+    ],
+  });
+  setChartReadout("sp500Readout", "S&P chart details will appear here.");
+}
+
+function getPortfolioWorkbookData() {
+  const holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
+  return {
+    trades: appState.portfolio.trades.map(formatTradeForWorkbook),
+    holdings: holdings.map(formatHoldingForWorkbook),
+  };
+}
+
+function formatTradeForWorkbook(trade) {
+  return {
+    Date: trade.date,
+    Symbol: trade.symbol,
+    Asset: trade.asset,
+    Sector: trade.sector,
+    Side: trade.side,
+    Quantity: trade.quantity,
+    "Trade Price": trade.tradePrice,
+    Fees: trade.fees,
+    Account: trade.account,
+    Notes: trade.notes,
+  };
+}
+
+function formatHoldingForWorkbook(holding) {
+  return {
+    Symbol: holding.symbol,
+    Asset: holding.asset,
+    Sector: holding.sector,
+    Quantity: holding.quantity,
+    "Average Cost": holding.averageCost,
+    "Initial Value": holding.initialValue,
+    Account: holding.account,
+  };
+}
+
+function deriveHoldingsFromTrades(trades, includeQuoteFields = true) {
+  const grouped = new Map();
+
+  [...trades]
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .forEach((trade) => {
+      const key = `${trade.account}__${trade.symbol}`;
+      const entry =
+        grouped.get(key) || {
+          symbol: trade.symbol,
+          asset: trade.asset,
+          sector: trade.sector,
+          account: trade.account,
+          quantity: 0,
+          averageCost: 0,
+          initialValue: 0,
+          realizedProfit: 0,
+          latestQuote: null,
+        };
+
+      const quantity = Number(trade.quantity) || 0;
+      const tradePrice = Number(trade.tradePrice) || 0;
+      const fees = Number(trade.fees) || 0;
+      const costBasisPerShare = entry.quantity > 0 ? entry.initialValue / entry.quantity : entry.averageCost;
+
+      if (trade.side === "buy") {
+        entry.initialValue += quantity * tradePrice + fees;
+        entry.quantity += quantity;
+        entry.averageCost = entry.quantity > 0 ? entry.initialValue / entry.quantity : 0;
+      } else {
+        const soldCostBasis = quantity * costBasisPerShare;
+        const proceeds = quantity * tradePrice - fees;
+        entry.realizedProfit += proceeds - soldCostBasis;
+        entry.quantity = Math.max(0, entry.quantity - quantity);
+        entry.initialValue = Math.max(0, entry.initialValue - soldCostBasis);
+        entry.averageCost = entry.quantity > 0 ? entry.initialValue / entry.quantity : 0;
+      }
+
+      grouped.set(key, entry);
+    });
+
+  const holdings = [...grouped.values()]
+    .filter((holding) => holding.quantity > 0 || Math.abs(holding.realizedProfit) > 0.005)
+    .map((holding) => {
+      const quote = includeQuoteFields ? holding.latestQuote || {} : {};
+      const currentPrice = Number(quote.price) || 0;
+      const previousClose = Number(quote.previousClose) || currentPrice || 0;
+      const currentValue = currentPrice * holding.quantity;
+      const dayChange = (currentPrice - previousClose) * holding.quantity;
+      const dayPercentChange = previousClose > 0 ? (currentPrice - previousClose) / previousClose : 0;
+      const unrealizedProfit = currentValue - holding.initialValue;
+
+      return {
+        ...holding,
+        currentPrice,
+        currentValue,
+        dayChange,
+        dayPercentChange,
+        unrealizedProfit,
+      };
+    });
+
+  return holdings;
+}
+
+async function refreshPortfolioQuotes() {
+  const holdingsBase = deriveHoldingsFromTrades(appState.portfolio.trades, false);
+  if (!holdingsBase.length) {
+    setInlineStatus("portfolioStatus", "Add or import trades first.", "negative");
+    renderPortfolio();
+    return;
+  }
+
+  setInlineStatus("portfolioStatus", "Refreshing quotes...", "neutral");
+  const quotes = await Promise.all(
+    holdingsBase.map(async (holding) => {
+      try {
+        return await fetchStockData(holding.symbol);
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  const quoteMap = new Map();
+  quotes.forEach((quote) => {
+    if (quote?.symbol) quoteMap.set(quote.symbol, quote);
+  });
+
+  appState.portfolio.holdings = holdingsBase.map((holding) => {
+    const quote = quoteMap.get(holding.symbol) || {};
+    const currentPrice = Number(quote.price) || 0;
+    const previousClose = Number(quote.previousClose) || currentPrice || 0;
+    const currentValue = currentPrice * holding.quantity;
+    const dayChange = (currentPrice - previousClose) * holding.quantity;
+    const dayPercentChange = previousClose > 0 ? (currentPrice - previousClose) / previousClose : 0;
+    const unrealizedProfit = currentValue - holding.initialValue;
+
+    return {
+      ...holding,
+      currentPrice,
+      currentValue,
+      dayChange,
+      dayPercentChange,
+      unrealizedProfit,
+      latestQuote: quote,
+      asset: holding.asset || quote.name || holding.symbol,
+      sector: holding.sector || quote.sector || "Unassigned",
+    };
+  });
+
+  persistPortfolioState();
+  renderPortfolio();
+  setInlineStatus("portfolioStatus", "Portfolio quotes refreshed.", "positive");
+}
+
+function portfolioTotals(holdings) {
+  const currentValue = holdings.reduce((sum, holding) => sum + (holding.currentValue || 0), 0);
+  const initialValue = holdings.reduce((sum, holding) => sum + (holding.initialValue || 0), 0);
+  const dayChange = holdings.reduce((sum, holding) => sum + (holding.dayChange || 0), 0);
+  const unrealizedProfit = holdings.reduce((sum, holding) => sum + (holding.unrealizedProfit || 0), 0);
+  const realizedProfit = holdings.reduce((sum, holding) => sum + (holding.realizedProfit || 0), 0);
+  return { currentValue, initialValue, dayChange, unrealizedProfit, realizedProfit };
+}
+
+function renderPortfolioCards(holdings) {
+  const totals = portfolioTotals(holdings);
+  el("portfolioCards").innerHTML = [
+    ["Portfolio value", formatDollarValue(totals.currentValue), "Current market value"],
+    ["Day change", formatDollarValue(totals.dayChange), formatPercent(totals.currentValue ? totals.dayChange / totals.currentValue : 0), classForValue(totals.dayChange)],
+    ["Unrealized P/L", formatDollarValue(totals.unrealizedProfit), "Open positions only", classForValue(totals.unrealizedProfit)],
+    ["Realized P/L", formatDollarValue(totals.realizedProfit), "Closed gains and losses", classForValue(totals.realizedProfit)],
+  ]
+    .map(
+      ([label, value, copy, extraClass = ""]) => `
+        <article class="metric-card">
+          <span>${label}</span>
+          <strong class="${extraClass}">${value}</strong>
+          <p>${copy}</p>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function renderPortfolioTrades() {
+  const tbody = el("portfolioTradesTable");
+  if (!appState.portfolio.trades.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="small-muted">No trades yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = appState.portfolio.trades
+    .map(
+      (trade) => `
+        <tr>
+          <td>${formatDate(trade.date)}</td>
+          <td>${trade.symbol}</td>
+          <td>${trade.side.toUpperCase()}</td>
+          <td>${trade.quantity}</td>
+          <td>${formatDollarValue(trade.tradePrice)}</td>
+          <td>${formatDollarValue(trade.fees)}</td>
+          <td>${safeText(trade.account, "Account")}</td>
+          <td>
+            <div class="table-actions">
+              <button class="tiny-button" type="button" data-trade-action="edit" data-trade-id="${trade.id}">Edit</button>
+              <button class="tiny-button danger" type="button" data-trade-action="delete" data-trade-id="${trade.id}">Delete</button>
+            </div>
+          </td>
+        </tr>
+      `,
+    )
+    .join("");
+}
+
+function renderPortfolioHoldings() {
+  const tbody = el("portfolioHoldingsTable");
+  const holdings = appState.portfolio.holdings || [];
+  if (!holdings.length) {
+    tbody.innerHTML = `<tr><td colspan="13" class="small-muted">No holdings yet.</td></tr>`;
+    return;
+  }
+  const totals = portfolioTotals(holdings);
+  tbody.innerHTML = holdings
+    .map((holding) => {
+      const allocation = totals.currentValue > 0 ? holding.currentValue / totals.currentValue : 0;
+      return `
+        <tr>
+          <td>${safeText(holding.account, "Account")}</td>
+          <td>${safeText(holding.sector, "Unassigned")}</td>
+          <td>${safeText(holding.asset, holding.symbol)}</td>
+          <td>${formatDollarValue(holding.currentPrice)}</td>
+          <td>${formatDollarValue(holding.averageCost)}</td>
+          <td>${holding.quantity.toFixed(4).replace(/\.?0+$/, "")}</td>
+          <td>${formatDollarValue(holding.initialValue)}</td>
+          <td>${formatDollarValue(holding.currentValue)}</td>
+          <td class="${classForValue(holding.dayChange)}">${formatDollarValue(holding.dayChange)}</td>
+          <td class="${classForValue(holding.dayPercentChange)}">${formatPercent(holding.dayPercentChange)}</td>
+          <td class="${classForValue(holding.unrealizedProfit)}">${formatDollarValue(holding.unrealizedProfit)}</td>
+          <td class="${classForValue(holding.realizedProfit)}">${formatDollarValue(holding.realizedProfit)}</td>
+          <td>${formatPercent(allocation)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+}
+
+function createPieChart(chartKey, canvasId, labels, values, palette) {
+  destroyChart(chartKey);
+  const ctx = el(canvasId).getContext("2d");
+  const chart = new Chart(ctx, {
+    type: "doughnut",
+    data: {
+      labels,
+      datasets: [
+        {
+          data: values,
+          backgroundColor: palette,
+          borderColor: "#0f1724",
+          borderWidth: 2,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          labels: {
+            color: "#dce9ff",
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label(context) {
+              return `${context.label}: ${formatDollarValue(context.parsed)}`;
+            },
+          },
+        },
+      },
+    },
+  });
+  appState.charts[chartKey] = { chart };
+}
+
+function resizeVisibleCharts() {
+  requestAnimationFrame(() => {
+    Object.values(appState.charts).forEach((bundle) => {
+      if (bundle?.chart) {
+        bundle.chart.resize();
+        bundle.chart.update("none");
+      }
+    });
+  });
+}
+
+function renderPortfolioCharts(holdings) {
+  const byAsset = [];
+  const bySector = new Map();
+  holdings.forEach((holding) => {
+    if (holding.currentValue > 0) {
+      byAsset.push({ label: holding.symbol, value: holding.currentValue });
+      bySector.set(holding.sector || "Unassigned", (bySector.get(holding.sector || "Unassigned") || 0) + holding.currentValue);
+    }
+  });
+
+  const assetPalette = ["#4f8cff", "#3ecf8e", "#f4b74e", "#ef6b73", "#8c72ff", "#2ed3d8", "#e58eff", "#9cc85f"];
+  const sectorEntries = [...bySector.entries()];
+
+  createPieChart(
+    "portfolioAllocation",
+    "portfolioAllocationChart",
+    byAsset.map((item) => item.label),
+    byAsset.map((item) => item.value),
+    byAsset.map((_, index) => assetPalette[index % assetPalette.length]),
+  );
+
+  createPieChart(
+    "portfolioSector",
+    "portfolioSectorChart",
+    sectorEntries.map(([label]) => label),
+    sectorEntries.map(([, value]) => value),
+    sectorEntries.map((_, index) => assetPalette[(index + 2) % assetPalette.length]),
+  );
+}
+
+function renderPortfolio() {
+  if (!Array.isArray(appState.portfolio.holdings)) {
+    appState.portfolio.holdings = [];
+  }
+  renderPortfolioCards(appState.portfolio.holdings);
+  renderPortfolioTrades();
+  renderPortfolioHoldings();
+  renderPortfolioCharts(appState.portfolio.holdings);
+}
+
+function resetTradeForm() {
+  el("tradeForm").reset();
+  el("tradeDate").value = new Date().toISOString().slice(0, 10);
+  el("tradeSide").value = "buy";
+  el("tradeFees").value = "0";
+  appState.activeTradeEditId = null;
+  el("saveTradeButton").textContent = "Add trade";
+}
+
+function readTradeForm() {
+  const trade = {
+    id: appState.activeTradeEditId || `trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    date: el("tradeDate").value,
+    symbol: el("tradeSymbol").value.trim().toUpperCase(),
+    asset: el("tradeAsset").value.trim(),
+    sector: el("tradeSector").value.trim() || "Unassigned",
+    side: el("tradeSide").value,
+    quantity: Number(el("tradeQuantity").value),
+    tradePrice: Number(el("tradePrice").value),
+    fees: Number(el("tradeFees").value) || 0,
+    account: el("tradeAccount").value.trim() || "Primary",
+    notes: el("tradeNotes").value.trim(),
+  };
+
+  if (!trade.date || !trade.symbol || !trade.quantity || !Number.isFinite(trade.tradePrice)) {
+    throw new Error("Date, symbol, quantity, and trade price are required.");
+  }
+
+  return trade;
+}
+
+function upsertTrade(trade) {
+  const index = appState.portfolio.trades.findIndex((item) => item.id === trade.id);
+  if (index >= 0) {
+    appState.portfolio.trades.splice(index, 1, trade);
+  } else {
+    appState.portfolio.trades.push(trade);
+  }
+  appState.portfolio.trades.sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
+async function handleTradeSubmit(event) {
+  event.preventDefault();
+  try {
+    const trade = readTradeForm();
+    upsertTrade(trade);
+    appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
+    persistPortfolioState();
+    renderPortfolio();
+    resetTradeForm();
+    setInlineStatus("portfolioStatus", "Trade saved. Pull latest info to refresh quotes.", "positive");
+  } catch (error) {
+    setInlineStatus("portfolioStatus", error.message, "negative");
+  }
+}
+
+function editTrade(tradeId) {
+  const trade = appState.portfolio.trades.find((item) => item.id === tradeId);
+  if (!trade) return;
+  appState.activeTradeEditId = trade.id;
+  el("tradeDate").value = trade.date;
+  el("tradeSymbol").value = trade.symbol;
+  el("tradeAsset").value = trade.asset;
+  el("tradeSector").value = trade.sector;
+  el("tradeSide").value = trade.side;
+  el("tradeQuantity").value = trade.quantity;
+  el("tradePrice").value = trade.tradePrice;
+  el("tradeFees").value = trade.fees;
+  el("tradeAccount").value = trade.account;
+  el("tradeNotes").value = trade.notes;
+  el("saveTradeButton").textContent = "Update trade";
+  activateTab("portfolio");
+}
+
+function deleteTrade(tradeId) {
+  appState.portfolio.trades = appState.portfolio.trades.filter((item) => item.id !== tradeId);
+  appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
+  persistPortfolioState();
+  renderPortfolio();
+  setInlineStatus("portfolioStatus", "Trade deleted.", "positive");
+}
+
+function rowsHaveColumns(rows, required) {
+  const headers = new Set(Object.keys(rows[0] || {}));
+  return required.every((column) => headers.has(column));
+}
+
+function normalizeImportedTrade(row, index) {
+  return {
+    id: row.id || `import_${Date.now()}_${index}`,
+    date: normalizeImportDate(row.Date),
+    symbol: String(row.Symbol || "").trim().toUpperCase(),
+    asset: String(row.Asset || "").trim(),
+    sector: String(row.Sector || "Unassigned").trim(),
+    side: String(row.Side || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy",
+    quantity: Number(row.Quantity) || 0,
+    tradePrice: Number(row["Trade Price"]) || 0,
+    fees: Number(row.Fees) || 0,
+    account: String(row.Account || "Primary").trim(),
+    notes: String(row.Notes || "").trim(),
+  };
+}
+
+function normalizeImportedHolding(row) {
+  return {
+    symbol: String(row.Symbol || "").trim().toUpperCase(),
+    asset: String(row.Asset || "").trim(),
+    sector: String(row.Sector || "Unassigned").trim(),
+    quantity: Number(row.Quantity) || 0,
+    averageCost: Number(row["Average Cost"]) || 0,
+    initialValue: Number(row["Initial Value"]) || 0,
+    account: String(row.Account || "Primary").trim(),
+  };
+}
+
+function normalizeImportDate(value) {
+  if (!value) return new Date().toISOString().slice(0, 10);
+  if (typeof value === "number") {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) {
+      const date = new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
+      return date.toISOString().slice(0, 10);
+    }
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
+  return date.toISOString().slice(0, 10);
+}
+
+function importPortfolioWorkbook(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const workbook = XLSX.read(reader.result, { type: "array" });
+        const tradesSheet = workbook.Sheets.Trades;
+        const holdingsSheet = workbook.Sheets.Holdings;
+
+        if (!tradesSheet || !holdingsSheet) {
+          throw new Error("Workbook must contain both Trades and Holdings sheets.");
+        }
+
+        const tradesRows = XLSX.utils.sheet_to_json(tradesSheet, { defval: "" });
+        const holdingsRows = XLSX.utils.sheet_to_json(holdingsSheet, { defval: "" });
+
+        if (tradesRows.length && !rowsHaveColumns(tradesRows, requiredTradeColumns)) {
+          throw new Error("Trades sheet is missing one or more required columns.");
+        }
+        if (holdingsRows.length && !rowsHaveColumns(holdingsRows, requiredHoldingColumns)) {
+          throw new Error("Holdings sheet is missing one or more required columns.");
+        }
+
+        resolve({
+          trades: tradesRows.map(normalizeImportedTrade),
+          holdings: holdingsRows.map(normalizeImportedHolding),
+        });
+      } catch (error) {
+        reject(error);
+      }
+    };
+    reader.onerror = () => reject(new Error("Could not read the workbook."));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function exportPortfolioWorkbook() {
+  const workbookData = getPortfolioWorkbookData();
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(workbookData.trades, { header: requiredTradeColumns }), "Trades");
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(workbookData.holdings, { header: requiredHoldingColumns }), "Holdings");
+  XLSX.writeFile(workbook, "portfolio-dashboard.xlsx");
+}
+
+function exportTradesCsv() {
+  const workbookData = getPortfolioWorkbookData();
+  const sheet = XLSX.utils.json_to_sheet(workbookData.trades, { header: requiredTradeColumns });
+  const csv = XLSX.utils.sheet_to_csv(sheet);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "portfolio-trades.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadPortfolioTemplate() {
+  const workbook = XLSX.utils.book_new();
+  const templateTrades = [
+    {
+      Date: "2026-01-10",
+      Symbol: "AAPL",
+      Asset: "Apple Inc.",
+      Sector: "Technology",
+      Side: "buy",
+      Quantity: 10,
+      "Trade Price": 185,
+      Fees: 0,
+      Account: "Brokerage",
+      Notes: "Example starter row",
+    },
+  ];
+  const templateHoldings = [
+    {
+      Symbol: "AAPL",
+      Asset: "Apple Inc.",
+      Sector: "Technology",
+      Quantity: 10,
+      "Average Cost": 185,
+      "Initial Value": 1850,
+      Account: "Brokerage",
+    },
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(templateTrades, { header: requiredTradeColumns }), "Trades");
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(templateHoldings, { header: requiredHoldingColumns }), "Holdings");
+  XLSX.writeFile(workbook, "portfolio-template.xlsx");
+}
+
+function activateTab(tabId) {
+  document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === tabId));
+  document.querySelectorAll(".panel").forEach((panel) => panel.classList.toggle("active", panel.id === tabId));
+  resizeVisibleCharts();
+}
+
+function toggleCompareView(view) {
+  appState.compareView = view;
+  document.querySelectorAll("[data-compare-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.compareView === view);
+  });
+  el("compareHistoricalBlock").classList.toggle("active", view === "historical");
+  el("compareForwardBlock").classList.toggle("active", view === "forward");
+  resizeVisibleCharts();
+}
+
+function bindTabEvents() {
+  document.querySelectorAll(".tab").forEach((button) => {
+    button.addEventListener("click", () => activateTab(button.dataset.tab));
+  });
+}
+
+function bindChartControls() {
+  document.querySelectorAll("[data-chart-mode-target]").forEach((group) => {
+    group.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-mode]");
+      if (!button) return;
+      const chartKey = group.dataset.chartModeTarget;
+      group.querySelectorAll(".segmented-button").forEach((node) => node.classList.remove("active"));
+      button.classList.add("active");
+      updateChartMode(chartKey, button.dataset.mode);
+    });
+  });
+
+  document.querySelectorAll("[data-chart-reset]").forEach((button) => {
+    button.addEventListener("click", () => resetChartView(button.dataset.chartReset));
+  });
+
+  document.querySelectorAll("[data-chart-range-target]").forEach((group) => {
+    group.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-range]");
+      if (!button) return;
+      const chartKey = group.dataset.chartRangeTarget;
+      group.querySelectorAll(".segmented-button").forEach((node) => node.classList.remove("active"));
+      button.classList.add("active");
+
+      if (chartKey === "projectionHistorical") {
+        appState.projectionHistoryRange = button.dataset.range;
+        await loadProjectionHistoricalChart(el("ticker").value, appState.projectionHistoryRange);
+      } else if (chartKey === "compareHistorical") {
+        appState.compareHistoryRange = button.dataset.range;
+        await loadCompareHistoricalChart(appState.compareHistoryRange);
+      }
+    });
+  });
+}
+
+function bindWatchlistActions() {
+  el("watchlistGrid").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-watch-action]");
+    if (!button) return;
+    const index = Number(button.dataset.watchIndex);
+    const item = appState.watchlist[index];
+    if (!item) return;
+
+    if (button.dataset.watchAction === "load") {
+      restoreProjectionInputs(item.inputs);
+      runProjection();
+      activateTab("projection");
+      setInlineStatus("projectionSaveStatus", `${item.ticker} loaded from watchlist.`, "positive");
+    } else if (button.dataset.watchAction === "delete") {
+      appState.watchlist.splice(index, 1);
+      persistWatchlist();
+      renderWatchlist();
+    }
+  });
+}
+
+function bindPortfolioActions() {
+  el("tradeForm").addEventListener("submit", handleTradeSubmit);
+  el("resetTradeForm").addEventListener("click", resetTradeForm);
+  el("downloadPortfolioTemplate").addEventListener("click", downloadPortfolioTemplate);
+  el("importPortfolioButton").addEventListener("click", () => el("portfolioFileInput").click());
+  el("exportPortfolioButton").addEventListener("click", exportPortfolioWorkbook);
+  el("exportTradesCsvButton").addEventListener("click", exportTradesCsv);
+  el("refreshPortfolioQuotes").addEventListener("click", refreshPortfolioQuotes);
+
+  el("portfolioFileInput").addEventListener("change", async (event) => {
+    const [file] = event.target.files || [];
+    if (!file) return;
+    try {
+      const imported = await importPortfolioWorkbook(file);
+      appState.portfolio.trades = imported.trades;
+      appState.portfolio.holdings = deriveHoldingsFromTrades(imported.trades, false);
+      persistPortfolioState();
+      renderPortfolio();
+      setInlineStatus("portfolioStatus", "Workbook imported. Pull latest info to add current quotes.", "positive");
+    } catch (error) {
+      setInlineStatus("portfolioStatus", error.message, "negative");
+    } finally {
+      event.target.value = "";
+    }
+  });
+
+  el("portfolioTradesTable").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-trade-action]");
+    if (!button) return;
+    const tradeId = button.dataset.tradeId;
+    if (button.dataset.tradeAction === "edit") {
+      editTrade(tradeId);
+    } else if (button.dataset.tradeAction === "delete") {
+      deleteTrade(tradeId);
+    }
+  });
+}
+
+function bindEvents() {
+  bindTabEvents();
+  bindChartControls();
+  bindWatchlistActions();
+  bindPortfolioActions();
+
+  el("projectionForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    runProjection();
+    await loadProjectionHistoricalChart(el("ticker").value, appState.projectionHistoryRange).catch(() => {});
+  });
+
+  [
+    "ticker",
+    "currentPrice",
+    "revenue",
+    "shares",
+    "eps",
+    "years",
+    "bearGrowth",
+    "bearMargin",
+    "bearPe",
+    "bearDilution",
+    "baseGrowth",
+    "baseMargin",
+    "basePe",
+    "baseDilution",
+    "bullGrowth",
+    "bullMargin",
+    "bullPe",
+    "bullDilution",
+  ].forEach((id) => {
+    el(id).addEventListener("input", () => {
+      runProjection();
+    });
+  });
+
+  el("saveProjection").addEventListener("click", saveProjection);
+  el("fetchTicker").addEventListener("click", fetchProjectionTicker);
+  el("runCompare").addEventListener("click", async () => {
+    runCompare();
+    await loadCompareHistoricalChart(appState.compareHistoryRange).catch(() => {});
+  });
+  el("fetchCompare").addEventListener("click", fetchCompareTickers);
+  el("runReverse").addEventListener("click", runReverse);
+  el("runMos").addEventListener("click", runMos);
+  el("runSize").addEventListener("click", runSize);
+  el("sp500Form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    renderSp500();
+  });
+  el("clearWatchlist").addEventListener("click", () => {
+    appState.watchlist = [];
+    persistWatchlist();
+    renderWatchlist();
+  });
+  el("useCurrentForA").addEventListener("click", () => {
+    const input = readProjectionInputs();
+    el("compareATicker").value = input.ticker;
+    el("compareAPrice").value = input.currentPrice;
+    el("compareAEps").value = input.eps;
+    el("compareAGrowth").value = (input.cases.base.growth * 100).toFixed(1);
+    el("compareAPe").value = input.cases.base.pe;
+    runCompare();
+  });
+  el("compareViewToggle").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-compare-view]");
+    if (!button) return;
+    toggleCompareView(button.dataset.compareView);
+  });
+}
+
+function runProjection() {
+  const result = calculateProjection(readProjectionInputs());
+  renderProjection(result);
+  return result;
+}
+
+function seedPortfolioIfEmpty() {
+  if (appState.portfolio.trades.length) return;
+  appState.portfolio = structuredClone(portfolioTemplate);
+  persistPortfolioState();
+}
+
+async function init() {
+  el("currentDate").textContent = new Date().toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  loadWatchlist();
+  seedPortfolioIfEmpty();
+  bindEvents();
+  resetTradeForm();
+  runProjection();
+  runCompare();
+  runReverse();
+  runMos();
+  runSize();
+  renderSp500();
+  renderWatchlist();
+  appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
+  renderPortfolio();
+  toggleCompareView("historical");
+
+  try {
+    await loadProjectionHistoricalChart(el("ticker").value, appState.projectionHistoryRange);
+  } catch {
+    setChartReadout("projectionHistoricalReadout", "Historical chart could not load yet. Fetch a ticker to try again.");
+  }
+
+  try {
+    await loadCompareHistoricalChart(appState.compareHistoryRange);
+  } catch {
+    setChartReadout("compareHistoricalReadout", "Historical comparison could not load yet. Fetch A & B to try again.");
+  }
+}
+
+init();
