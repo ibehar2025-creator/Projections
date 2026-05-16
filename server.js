@@ -2,10 +2,24 @@ import { createServer } from "http";
 import { readFile } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import crypto from "crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const port = process.env.PORT || 3000;
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
+const SESSION_SECRET = process.env.SESSION_SECRET || "";
+
+const DRIVE_SCOPES = [
+  "https://www.googleapis.com/auth/drive.appdata",
+  "openid",
+  "email",
+].join(" ");
+const DRIVE_PORTFOLIO_FILE = "stock-dashboard-portfolio.json";
+const SESSION_COOKIE = "stocklab_drive_session";
+const STATE_COOKIE = "stocklab_drive_state";
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -54,12 +68,136 @@ function secLookupSymbol(symbol) {
   return String(symbol || "").toUpperCase().replace(/\./g, "-");
 }
 
-function sendJson(res, status, data) {
+function sendJson(res, status, data, extraHeaders = {}) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
+    ...extraHeaders,
   });
   res.end(JSON.stringify(data));
+}
+
+function redirect(res, location, headers = {}) {
+  res.writeHead(302, {
+    Location: location,
+    "Cache-Control": "no-store",
+    ...headers,
+  });
+  res.end();
+}
+
+function configuredForDrive() {
+  return Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && SESSION_SECRET);
+}
+
+function shaKey() {
+  return crypto.createHash("sha256").update(SESSION_SECRET).digest();
+}
+
+function base64UrlEncode(buffer) {
+  return Buffer.from(buffer)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function base64UrlDecode(value) {
+  const normalized = String(value).replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "===".slice((normalized.length + 3) % 4);
+  return Buffer.from(padded, "base64");
+}
+
+function encryptPayload(payload) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", shaKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [iv, tag, encrypted].map(base64UrlEncode).join(".");
+}
+
+function decryptPayload(serialized) {
+  if (!serialized) return null;
+  try {
+    const [ivPart, tagPart, dataPart] = String(serialized).split(".");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", shaKey(), base64UrlDecode(ivPart));
+    decipher.setAuthTag(base64UrlDecode(tagPart));
+    const decrypted = Buffer.concat([decipher.update(base64UrlDecode(dataPart)), decipher.final()]);
+    return JSON.parse(decrypted.toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function parseCookies(req) {
+  const cookieHeader = req.headers.cookie || "";
+  return Object.fromEntries(
+    cookieHeader
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const index = part.indexOf("=");
+        if (index < 0) return [part, ""];
+        return [part.slice(0, index), decodeURIComponent(part.slice(index + 1))];
+      }),
+  );
+}
+
+function cookieBaseAttributes(req) {
+  const secure = req.headers["x-forwarded-proto"] === "https" || req.socket.encrypted;
+  return [`Path=/`, `HttpOnly`, `SameSite=Lax`, secure ? "Secure" : ""].filter(Boolean).join("; ");
+}
+
+function setCookie(res, req, name, value, maxAgeSeconds) {
+  const cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${maxAgeSeconds}; ${cookieBaseAttributes(req)}`;
+  const current = res.getHeader("Set-Cookie");
+  const list = Array.isArray(current) ? current : current ? [current] : [];
+  res.setHeader("Set-Cookie", [...list, cookie]);
+}
+
+function clearCookie(res, req, name) {
+  setCookie(res, req, name, "", 0);
+}
+
+function getOrigin(req) {
+  const proto = req.headers["x-forwarded-proto"] || (req.socket.encrypted ? "https" : "http");
+  return `${proto}://${req.headers.host}`;
+}
+
+function getRedirectUri(req) {
+  return `${getOrigin(req)}/api/drive/auth/callback`;
+}
+
+function getDriveSession(req) {
+  const cookies = parseCookies(req);
+  return decryptPayload(cookies[SESSION_COOKIE]) || null;
+}
+
+function setDriveSession(res, req, session) {
+  setCookie(res, req, SESSION_COOKIE, encryptPayload(session), 60 * 60 * 24 * 30);
+}
+
+function setOauthState(res, req, payload) {
+  setCookie(res, req, STATE_COOKIE, encryptPayload(payload), 60 * 10);
+}
+
+function getOauthState(req) {
+  const cookies = parseCookies(req);
+  return decryptPayload(cookies[STATE_COOKIE]) || null;
+}
+
+async function readRequestBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function readJsonBody(req) {
+  const raw = await readRequestBody(req);
+  return raw ? JSON.parse(raw) : {};
 }
 
 async function fetchJson(url, headers = {}) {
@@ -91,6 +229,183 @@ async function fetchText(url) {
   }
 
   return response.text();
+}
+
+async function exchangeGoogleCode(req, code) {
+  const body = new URLSearchParams({
+    code,
+    client_id: GOOGLE_CLIENT_ID,
+    client_secret: GOOGLE_CLIENT_SECRET,
+    redirect_uri: getRedirectUri(req),
+    grant_type: "authorization_code",
+  });
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error_description || data.error || "Could not finish Google sign-in.");
+  }
+  return data;
+}
+
+async function refreshGoogleAccessToken(session) {
+  if (!session?.refreshToken) {
+    throw new Error("Missing refresh token.");
+  }
+
+  const body = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    client_secret: GOOGLE_CLIENT_SECRET,
+    refresh_token: session.refreshToken,
+    grant_type: "refresh_token",
+  });
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error_description || data.error || "Could not refresh Drive access.");
+  }
+
+  return {
+    ...session,
+    accessToken: data.access_token,
+    expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000,
+    scope: data.scope || session.scope,
+    tokenType: data.token_type || session.tokenType || "Bearer",
+  };
+}
+
+async function ensureDriveSession(req, res) {
+  if (!configuredForDrive()) {
+    throw new Error("Drive sync is not configured on the server.");
+  }
+
+  let session = getDriveSession(req);
+  if (!session?.accessToken) {
+    throw new Error("Drive is not connected.");
+  }
+
+  if (!session.expiresAt || session.expiresAt - Date.now() < 60_000) {
+    session = await refreshGoogleAccessToken(session);
+    setDriveSession(res, req, session);
+  }
+
+  return session;
+}
+
+async function driveFetchJson(req, res, url, options = {}) {
+  const session = await ensureDriveSession(req, res);
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${session.accessToken}`,
+      Accept: "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = data.error?.message || data.error_description || `Drive request failed (${response.status})`;
+    throw new Error(message);
+  }
+  return data;
+}
+
+async function driveFetchText(req, res, url, options = {}) {
+  const session = await ensureDriveSession(req, res);
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${session.accessToken}`,
+      ...(options.headers || {}),
+    },
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(text || `Drive request failed (${response.status})`);
+  }
+  return text;
+}
+
+function buildDriveMultipartBody(metadata, rawContent, boundary) {
+  return [
+    `--${boundary}`,
+    "Content-Type: application/json; charset=UTF-8",
+    "",
+    JSON.stringify(metadata),
+    `--${boundary}`,
+    "Content-Type: application/json; charset=UTF-8",
+    "",
+    rawContent,
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+}
+
+async function findPortfolioFile(req, res) {
+  const query = encodeURIComponent(`name='${DRIVE_PORTFOLIO_FILE.replace(/'/g, "\\'")}' and trashed=false`);
+  const data = await driveFetchJson(
+    req,
+    res,
+    `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${query}&fields=files(id,name,modifiedTime)`,
+  );
+  return data.files?.[0] || null;
+}
+
+async function readPortfolioFile(req, res, fileId) {
+  const raw = await driveFetchText(req, res, `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+  return JSON.parse(raw);
+}
+
+async function createPortfolioFile(req, res, payload) {
+  const boundary = `stocklab_${crypto.randomBytes(8).toString("hex")}`;
+  const body = buildDriveMultipartBody(
+    {
+      name: DRIVE_PORTFOLIO_FILE,
+      parents: ["appDataFolder"],
+      mimeType: "application/json",
+    },
+    JSON.stringify(payload),
+    boundary,
+  );
+
+  const data = await driveFetchJson(
+    req,
+    res,
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    },
+  );
+  return data;
+}
+
+async function updatePortfolioFile(req, res, fileId, payload) {
+  const data = await driveFetchJson(
+    req,
+    res,
+    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id,modifiedTime`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json; charset=UTF-8",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  return data;
 }
 
 async function fetchFinnhub(symbol) {
@@ -391,6 +706,141 @@ async function fetchHistoricalYahoo(symbol, rangeKey) {
   };
 }
 
+async function handleGoogleAuthStart(req, res) {
+  if (!configuredForDrive()) {
+    sendJson(res, 501, {
+      error: "Drive sync is not configured. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and SESSION_SECRET in Render.",
+    });
+    return;
+  }
+
+  const state = crypto.randomBytes(16).toString("hex");
+  setOauthState(res, req, { state, redirectUri: getRedirectUri(req), createdAt: Date.now() });
+
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: getRedirectUri(req),
+    response_type: "code",
+    access_type: "offline",
+    prompt: "consent",
+    scope: DRIVE_SCOPES,
+    state,
+  });
+  redirect(res, `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+}
+
+async function handleGoogleAuthCallback(req, res, url) {
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  const savedState = getOauthState(req);
+
+  if (!code || !state || !savedState || savedState.state !== state) {
+    clearCookie(res, req, STATE_COOKIE);
+    redirect(res, "/?drive=error");
+    return;
+  }
+
+  try {
+    const tokens = await exchangeGoogleCode(req, code);
+    const existing = getDriveSession(req) || {};
+    const session = {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token || existing.refreshToken || null,
+      expiresAt: Date.now() + (Number(tokens.expires_in) || 3600) * 1000,
+      scope: tokens.scope || DRIVE_SCOPES,
+      tokenType: tokens.token_type || "Bearer",
+    };
+    setDriveSession(res, req, session);
+    clearCookie(res, req, STATE_COOKIE);
+    redirect(res, "/?drive=connected#portfolio");
+  } catch {
+    clearCookie(res, req, STATE_COOKIE);
+    redirect(res, "/?drive=error#portfolio");
+  }
+}
+
+async function handleDriveAuthStatus(req, res) {
+  if (!configuredForDrive()) {
+    sendJson(res, 200, { connected: false, configured: false });
+    return;
+  }
+
+  try {
+    await ensureDriveSession(req, res);
+    const file = await findPortfolioFile(req, res);
+    sendJson(res, 200, {
+      connected: true,
+      configured: true,
+      fileId: file?.id || null,
+      remoteUpdatedAt: file?.modifiedTime || null,
+      remoteRevision: file?.modifiedTime || null,
+    });
+  } catch {
+    sendJson(res, 200, { connected: false, configured: true });
+  }
+}
+
+async function handleDriveLogout(req, res) {
+  clearCookie(res, req, SESSION_COOKIE);
+  clearCookie(res, req, STATE_COOKIE);
+  sendJson(res, 200, { ok: true });
+}
+
+async function handleDrivePortfolioLoad(req, res) {
+  const file = await findPortfolioFile(req, res);
+  if (!file?.id) {
+    sendJson(res, 404, { error: "No private Drive portfolio file exists yet." });
+    return;
+  }
+
+  const portfolio = await readPortfolioFile(req, res, file.id);
+  sendJson(res, 200, {
+    fileId: file.id,
+    remoteUpdatedAt: file.modifiedTime || portfolio.updatedAt || null,
+    remoteRevision: file.modifiedTime || portfolio.updatedAt || null,
+    portfolio,
+  });
+}
+
+async function handleDrivePortfolioSave(req, res) {
+  const body = await readJsonBody(req);
+  const portfolio = body?.portfolio;
+  const clientRemoteUpdatedAt = body?.remoteUpdatedAt || null;
+  const force = Boolean(body?.force);
+
+  if (!portfolio || !Array.isArray(portfolio.trades)) {
+    sendJson(res, 400, { error: "Portfolio payload must include a trades array." });
+    return;
+  }
+
+  const existing = await findPortfolioFile(req, res);
+  if (
+    existing?.modifiedTime &&
+    clientRemoteUpdatedAt &&
+    !force &&
+    new Date(existing.modifiedTime).getTime() > new Date(clientRemoteUpdatedAt).getTime()
+  ) {
+    sendJson(res, 409, {
+      error: "The private Drive copy is newer than the local cache.",
+      remoteUpdatedAt: existing.modifiedTime,
+      remoteRevision: existing.modifiedTime,
+      fileId: existing.id,
+    });
+    return;
+  }
+
+  const saved = existing?.id
+    ? await updatePortfolioFile(req, res, existing.id, portfolio)
+    : await createPortfolioFile(req, res, portfolio);
+
+  sendJson(res, 200, {
+    ok: true,
+    fileId: saved.id,
+    remoteUpdatedAt: saved.modifiedTime || portfolio.updatedAt || new Date().toISOString(),
+    remoteRevision: saved.modifiedTime || portfolio.updatedAt || new Date().toISOString(),
+  });
+}
+
 async function handleStockApi(res, symbol) {
   const clean = cleanSymbol(symbol);
   if (!clean) {
@@ -467,6 +917,36 @@ createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const stockHistoryMatch = url.pathname.match(/^\/api\/stock\/([^/]+)\/history$/);
     const stockMatch = url.pathname.match(/^\/api\/stock\/([^/]+)$/);
+
+    if (url.pathname === "/api/drive/auth/start" && req.method === "GET") {
+      await handleGoogleAuthStart(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/drive/auth/callback" && req.method === "GET") {
+      await handleGoogleAuthCallback(req, res, url);
+      return;
+    }
+
+    if (url.pathname === "/api/drive/auth/status" && req.method === "GET") {
+      await handleDriveAuthStatus(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/drive/auth/logout" && req.method === "POST") {
+      await handleDriveLogout(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/drive/portfolio" && req.method === "GET") {
+      await handleDrivePortfolioLoad(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/drive/portfolio" && req.method === "POST") {
+      await handleDrivePortfolioSave(req, res);
+      return;
+    }
 
     if (stockHistoryMatch) {
       await handleHistoryApi(res, stockHistoryMatch[1], url.searchParams.get("range") || "5y");
