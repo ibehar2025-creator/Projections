@@ -116,12 +116,35 @@
       })),
     ];
 
-    createLineChart("projectionForward", "projectionForwardChart", {
+    const chart = createLineChart("projectionForward", "projectionForwardChart", {
       readoutId: "projectionForwardReadout",
       xFormatter: (value) => formatDate(value),
       xTime: true,
       datasets,
     });
+
+    if (chart?.options?.scales?.x) {
+      chart.options.scales.x.type = "time";
+      chart.options.scales.x.time = {
+        unit: "year",
+        tooltipFormat: "MMM d, yyyy",
+        displayFormats: {
+          month: "MMM yyyy",
+          year: "yyyy",
+        },
+      };
+      chart.options.scales.x.ticks = {
+        ...(chart.options.scales.x.ticks || {}),
+        maxRotation: 0,
+        autoSkip: true,
+        callback(value) {
+          const date = new Date(Number(value));
+          if (Number.isNaN(date.getTime())) return "";
+          return date.getFullYear();
+        },
+      };
+      chart.update("none");
+    }
 
     setChartReadout(
       "projectionForwardReadout",
