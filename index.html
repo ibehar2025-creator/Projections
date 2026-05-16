@@ -7,14 +7,22 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <div><p class="eyebrow">Private investing workspace</p><h1>Stock Projection Lab</h1></div>
-        <div class="market-pill"><span id="currentDate"></span><strong id="dataStatus">Manual mode</strong></div>
+        <div>
+          <p class="eyebrow">Private investing workspace</p>
+          <h1>Stock Projection Lab</h1>
+        </div>
+        <div class="market-pill">
+          <span id="currentDate"></span>
+          <strong id="dataStatus">Manual mode</strong>
+        </div>
       </header>
+
       <nav class="tabs" aria-label="Stock tools">
         <button class="tab active" data-tab="projection">Projection</button>
         <button class="tab" data-tab="compare">Compare</button>
@@ -22,14 +30,254 @@
         <button class="tab" data-tab="watchlist">Watchlist</button>
         <button class="tab" data-tab="notes">Notes</button>
       </nav>
+
       <main>
-        <section class="panel active" id="projection"><div class="workspace-grid"><form class="tool-panel" id="projectionForm"><div class="section-heading"><h2>Scenario Inputs</h2><div class="heading-actions"><button class="ghost-button" type="button" id="fetchTicker">Fetch live data</button><button class="ghost-button" type="button" id="loadSample">Load TSLA-style sample</button></div></div><div class="input-grid"><label>Ticker<input id="ticker" value="AAPL" maxlength="8" /></label><label>Current share price<input id="currentPrice" type="number" min="0" step="0.01" value="190" /></label><label>Current revenue, millions<input id="revenue" type="number" min="0" step="1" value="385000" /></label><label>Shares outstanding, millions<input id="shares" type="number" min="0" step="1" value="15500" /></label><label>Current EPS<input id="eps" type="number" step="0.01" value="6.45" /></label><label>Projection years<input id="years" type="number" min="1" max="15" step="1" value="5" /></label></div><div class="scenario-table-wrap"><table class="scenario-table"><thead><tr><th>Case</th><th>Sales growth</th><th>Net margin</th><th>Exit P/E</th><th>Dilution / buyback</th></tr></thead><tbody><tr><td><span class="case-dot bear"></span>Bear</td><td><input id="bearGrowth" type="number" step="0.1" value="3" />%</td><td><input id="bearMargin" type="number" step="0.1" value="18" />%</td><td><input id="bearPe" type="number" step="0.1" value="18" /></td><td><input id="bearDilution" type="number" step="0.1" value="1" />%</td></tr><tr><td><span class="case-dot base"></span>Base</td><td><input id="baseGrowth" type="number" step="0.1" value="7" />%</td><td><input id="baseMargin" type="number" step="0.1" value="24" />%</td><td><input id="basePe" type="number" step="0.1" value="24" /></td><td><input id="baseDilution" type="number" step="0.1" value="-1.5" />%</td></tr><tr><td><span class="case-dot bull"></span>Bull</td><td><input id="bullGrowth" type="number" step="0.1" value="11" />%</td><td><input id="bullMargin" type="number" step="0.1" value="28" />%</td><td><input id="bullPe" type="number" step="0.1" value="30" /></td><td><input id="bullDilution" type="number" step="0.1" value="-2.5" />%</td></tr></tbody></table></div><div class="button-row"><button type="submit" class="primary-button">Run projection</button><button type="button" id="saveProjection" class="secondary-button">Save to watchlist</button></div><div class="data-card" id="stockDataCard"><strong>Live data not loaded yet.</strong><p>Enter a ticker and use Fetch live data to pull the latest available quote and company specs.</p></div></form><aside class="results-panel"><div class="section-heading"><h2>Projected Outcomes</h2><span class="small-muted">Revenue -> earnings -> terminal multiple</span></div><div class="metric-row" id="projectionCards"></div><canvas id="projectionChart" width="760" height="360"></canvas><div class="details-grid" id="projectionDetails"></div></aside></div></section>
-        <section class="panel" id="compare"><div class="compare-layout"><div class="tool-panel"><div class="section-heading"><h2>Compare Two Stocks</h2><div class="heading-actions"><button class="ghost-button" id="fetchCompare" type="button">Fetch A & B</button><button class="ghost-button" id="useCurrentForA" type="button">Use current projection as A</button></div></div><div class="two-col"><div class="mini-form"><h3>Stock A</h3><input placeholder="Ticker" id="compareATicker" value="AAPL" /><input placeholder="Current price" id="compareAPrice" type="number" value="190" /><input placeholder="Current EPS" id="compareAEps" type="number" value="6.45" /><input placeholder="EPS growth %" id="compareAGrowth" type="number" value="9" /><input placeholder="Terminal P/E" id="compareAPe" type="number" value="25" /></div><div class="mini-form"><h3>Stock B</h3><input placeholder="Ticker" id="compareBTicker" value="MSFT" /><input placeholder="Current price" id="compareBPrice" type="number" value="420" /><input placeholder="Current EPS" id="compareBEps" type="number" value="11.80" /><input placeholder="EPS growth %" id="compareBGrowth" type="number" value="12" /><input placeholder="Terminal P/E" id="compareBPe" type="number" value="28" /></div></div><label class="wide-label">Years to compare<input id="compareYears" type="number" min="1" max="15" value="5" /></label><button class="primary-button" id="runCompare" type="button">Compare projections</button></div><div class="results-panel"><div class="section-heading"><h2>Comparison Scoreboard</h2><span class="small-muted">EPS CAGR model for quick head-to-head checks</span></div><div id="compareCards" class="metric-row"></div><canvas id="compareChart" width="760" height="360"></canvas></div></div></section>
-        <section class="panel" id="valuation"><div class="tools-grid"><article class="tool-panel"><h2>Reverse Valuation</h2><p class="tool-copy">Find the annual EPS growth the current price implies.</p><label>Current price <input id="revPrice" type="number" value="190" /></label><label>Current EPS <input id="revEps" type="number" value="6.45" /></label><label>Exit P/E <input id="revPe" type="number" value="22" /></label><label>Years <input id="revYears" type="number" value="5" /></label><button class="primary-button" id="runReverse" type="button">Calculate</button><div class="answer-box" id="reverseAnswer"></div></article><article class="tool-panel"><h2>Margin of Safety</h2><p class="tool-copy">Compare fair value to market price and set a buy zone.</p><label>Fair value <input id="fairValue" type="number" value="240" /></label><label>Current price <input id="mosPrice" type="number" value="190" /></label><label>Required safety % <input id="mosPercent" type="number" value="25" /></label><button class="primary-button" id="runMos" type="button">Calculate</button><div class="answer-box" id="mosAnswer"></div></article><article class="tool-panel"><h2>Position Size</h2><p class="tool-copy">Risk-based position sizing for single-stock entries.</p><label>Portfolio value <input id="portfolioValue" type="number" value="50000" /></label><label>Max portfolio risk % <input id="riskPercent" type="number" value="1" /></label><label>Entry price <input id="entryPrice" type="number" value="50" /></label><label>Stop / invalidation price <input id="stopPrice" type="number" value="42" /></label><button class="primary-button" id="runSize" type="button">Calculate</button><div class="answer-box" id="sizeAnswer"></div></article></div></section>
-        <section class="panel" id="watchlist"><div class="watchlist-header"><div><h2>Saved Projections</h2><p class="small-muted">Stored in this browser only.</p></div><button class="secondary-button" id="clearWatchlist" type="button">Clear watchlist</button></div><div class="watchlist-grid" id="watchlistGrid"></div></section>
-        <section class="panel" id="notes"><div class="notes-layout"><div class="tool-panel"><h2>Research Checklist</h2><div class="checklist"><label><input type="checkbox" /> Revenue growth source is clear</label><label><input type="checkbox" /> Margins are realistic versus history</label><label><input type="checkbox" /> Balance sheet and dilution reviewed</label><label><input type="checkbox" /> Competition and moat pressure checked</label><label><input type="checkbox" /> Valuation works in bear case</label></div></div><div class="tool-panel"><h2>Personal Notes</h2><textarea id="researchNotes" placeholder="Write your thesis, risks, earnings notes, or watchlist triggers here."></textarea><button class="primary-button" id="saveNotes" type="button">Save notes</button></div><div class="tool-panel disclaimer"><h2>Model Notes</h2><p>This is a personal research tool, not financial advice. The projection model follows a long-term valuation workflow: estimate future revenue, convert it to earnings with net margin, adjust share count for dilution or buybacks, then apply an exit multiple.</p><p>The private 1000x Stocks calculator formula is not publicly documented, so this app uses transparent assumptions that you can edit.</p></div></div></section>
+        <section class="panel active" id="projection">
+          <div class="workspace-grid">
+            <form class="tool-panel" id="projectionForm">
+              <div class="section-heading">
+                <h2>Scenario Inputs</h2>
+                <div class="heading-actions">
+                  <button class="ghost-button" type="button" id="fetchTicker">Fetch live data</button>
+                  <button class="ghost-button" type="button" id="loadSample">Load TSLA-style sample</button>
+                </div>
+              </div>
+
+              <div class="input-grid">
+                <label>
+                  Ticker
+                  <input id="ticker" value="AAPL" maxlength="8" />
+                </label>
+                <label>
+                  Current share price
+                  <input id="currentPrice" type="number" min="0" step="0.01" value="190" />
+                </label>
+                <label>
+                  Current revenue, millions
+                  <input id="revenue" type="number" min="0" step="1" value="385000" />
+                </label>
+                <label>
+                  Shares outstanding, millions
+                  <input id="shares" type="number" min="0" step="1" value="15500" />
+                </label>
+                <label>
+                  Current EPS
+                  <input id="eps" type="number" step="0.01" value="6.45" />
+                </label>
+                <label>
+                  Projection years
+                  <input id="years" type="number" min="1" max="15" step="1" value="5" />
+                </label>
+              </div>
+
+              <div class="scenario-table-wrap">
+                <table class="scenario-table">
+                  <thead>
+                    <tr>
+                      <th>Case</th>
+                      <th>Sales growth</th>
+                      <th>Net margin</th>
+                      <th>Exit P/E</th>
+                      <th>Dilution / buyback</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><span class="case-dot bear"></span>Bear</td>
+                      <td><input id="bearGrowth" type="number" step="0.1" value="3" />%</td>
+                      <td><input id="bearMargin" type="number" step="0.1" value="18" />%</td>
+                      <td><input id="bearPe" type="number" step="0.1" value="18" /></td>
+                      <td><input id="bearDilution" type="number" step="0.1" value="1" />%</td>
+                    </tr>
+                    <tr>
+                      <td><span class="case-dot base"></span>Base</td>
+                      <td><input id="baseGrowth" type="number" step="0.1" value="7" />%</td>
+                      <td><input id="baseMargin" type="number" step="0.1" value="24" />%</td>
+                      <td><input id="basePe" type="number" step="0.1" value="24" /></td>
+                      <td><input id="baseDilution" type="number" step="0.1" value="-1.5" />%</td>
+                    </tr>
+                    <tr>
+                      <td><span class="case-dot bull"></span>Bull</td>
+                      <td><input id="bullGrowth" type="number" step="0.1" value="11" />%</td>
+                      <td><input id="bullMargin" type="number" step="0.1" value="28" />%</td>
+                      <td><input id="bullPe" type="number" step="0.1" value="30" /></td>
+                      <td><input id="bullDilution" type="number" step="0.1" value="-2.5" />%</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="button-row">
+                <button type="submit" class="primary-button">Run projection</button>
+                <button type="button" id="saveProjection" class="secondary-button">Save to watchlist</button>
+              </div>
+              <div class="data-card" id="stockDataCard">
+                <strong>Live data not loaded yet.</strong>
+                <p>Enter a ticker and use Fetch live data to pull the latest available quote and company specs.</p>
+              </div>
+            </form>
+
+            <aside class="results-panel">
+              <div class="section-heading">
+                <h2>Projected Outcomes</h2>
+                <span class="small-muted">Revenue -> earnings -> terminal multiple</span>
+              </div>
+              <div class="metric-row" id="projectionCards"></div>
+              <canvas id="projectionChart" width="760" height="360"></canvas>
+              <div class="details-grid" id="projectionDetails"></div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="panel" id="compare">
+          <div class="compare-layout">
+            <div class="tool-panel">
+              <div class="section-heading">
+                <h2>Compare Two Stocks</h2>
+                <div class="heading-actions">
+                  <button class="ghost-button" id="fetchCompare" type="button">Fetch A & B</button>
+                  <button class="ghost-button" id="useCurrentForA" type="button">Use current projection as A</button>
+                </div>
+              </div>
+              <div class="two-col">
+                <div class="mini-form" data-compare="A">
+                  <h3>Stock A</h3>
+                  <label>
+                    Ticker
+                    <input placeholder="AAPL" id="compareATicker" value="AAPL" />
+                  </label>
+                  <label>
+                    Current price
+                    <input placeholder="190" id="compareAPrice" type="number" value="190" />
+                  </label>
+                  <label>
+                    Current EPS
+                    <input placeholder="6.45" id="compareAEps" type="number" value="6.45" />
+                  </label>
+                  <label>
+                    EPS growth (%)
+                    <input placeholder="9" id="compareAGrowth" type="number" value="9" />
+                  </label>
+                  <label>
+                    Terminal P/E
+                    <input placeholder="25" id="compareAPe" type="number" value="25" />
+                  </label>
+                </div>
+                <div class="mini-form" data-compare="B">
+                  <h3>Stock B</h3>
+                  <label>
+                    Ticker
+                    <input placeholder="MSFT" id="compareBTicker" value="MSFT" />
+                  </label>
+                  <label>
+                    Current price
+                    <input placeholder="420" id="compareBPrice" type="number" value="420" />
+                  </label>
+                  <label>
+                    Current EPS
+                    <input placeholder="11.8" id="compareBEps" type="number" value="11.80" />
+                  </label>
+                  <label>
+                    EPS growth (%)
+                    <input placeholder="12" id="compareBGrowth" type="number" value="12" />
+                  </label>
+                  <label>
+                    Terminal P/E
+                    <input placeholder="28" id="compareBPe" type="number" value="28" />
+                  </label>
+                </div>
+              </div>
+              <label class="wide-label">
+                Years to compare
+                <input id="compareYears" type="number" min="1" max="15" value="5" />
+              </label>
+              <button class="primary-button" id="runCompare" type="button">Compare projections</button>
+            </div>
+            <div class="results-panel">
+              <div class="section-heading">
+                <h2>Comparison Scoreboard</h2>
+                <span class="small-muted">EPS CAGR model for quick head-to-head checks</span>
+              </div>
+              <div id="compareCards" class="metric-row"></div>
+              <canvas id="compareChart" width="760" height="360"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="valuation">
+          <div class="tools-grid">
+            <article class="tool-panel">
+              <h2>Reverse Valuation</h2>
+              <p class="tool-copy">Find the annual EPS growth the current price implies.</p>
+              <label>Current price <input id="revPrice" type="number" value="190" /></label>
+              <label>Current EPS <input id="revEps" type="number" value="6.45" /></label>
+              <label>Exit P/E <input id="revPe" type="number" value="22" /></label>
+              <label>Years <input id="revYears" type="number" value="5" /></label>
+              <button class="primary-button" id="runReverse" type="button">Calculate</button>
+              <div class="answer-box" id="reverseAnswer"></div>
+            </article>
+
+            <article class="tool-panel">
+              <h2>Margin of Safety</h2>
+              <p class="tool-copy">Compare fair value to market price and set a buy zone.</p>
+              <label>Fair value <input id="fairValue" type="number" value="240" /></label>
+              <label>Current price <input id="mosPrice" type="number" value="190" /></label>
+              <label>Required safety % <input id="mosPercent" type="number" value="25" /></label>
+              <button class="primary-button" id="runMos" type="button">Calculate</button>
+              <div class="answer-box" id="mosAnswer"></div>
+            </article>
+
+            <article class="tool-panel">
+              <h2>Position Size</h2>
+              <p class="tool-copy">Risk-based position sizing for single-stock entries.</p>
+              <label>Portfolio value <input id="portfolioValue" type="number" value="50000" /></label>
+              <label>Max portfolio risk % <input id="riskPercent" type="number" value="1" /></label>
+              <label>Entry price <input id="entryPrice" type="number" value="50" /></label>
+              <label>Stop / invalidation price <input id="stopPrice" type="number" value="42" /></label>
+              <button class="primary-button" id="runSize" type="button">Calculate</button>
+              <div class="answer-box" id="sizeAnswer"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel" id="watchlist">
+          <div class="watchlist-header">
+            <div>
+              <h2>Saved Projections</h2>
+              <p class="small-muted">Stored in this browser only.</p>
+            </div>
+            <button class="secondary-button" id="clearWatchlist" type="button">Clear watchlist</button>
+          </div>
+          <div class="watchlist-grid" id="watchlistGrid"></div>
+        </section>
+
+        <section class="panel" id="notes">
+          <div class="notes-layout">
+            <div class="tool-panel">
+              <h2>Research Checklist</h2>
+              <div class="checklist">
+                <label><input type="checkbox" /> Revenue growth source is clear</label>
+                <label><input type="checkbox" /> Margins are realistic versus history</label>
+                <label><input type="checkbox" /> Balance sheet and dilution reviewed</label>
+                <label><input type="checkbox" /> Competition and moat pressure checked</label>
+                <label><input type="checkbox" /> Valuation works in bear case</label>
+              </div>
+            </div>
+            <div class="tool-panel">
+              <h2>Personal Notes</h2>
+              <textarea id="researchNotes" placeholder="Write your thesis, risks, earnings notes, or watchlist triggers here."></textarea>
+              <button class="primary-button" id="saveNotes" type="button">Save notes</button>
+            </div>
+            <div class="tool-panel disclaimer">
+              <h2>Model Notes</h2>
+              <p>This is a personal research tool, not financial advice. The projection model follows a long-term valuation workflow: estimate future revenue, convert it to earnings with net margin, adjust share count for dilution or buybacks, then apply an exit multiple.</p>
+              <p>The private 1000x Stocks calculator formula is not publicly documented, so this app uses transparent assumptions that you can edit.</p>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
+
     <script src="script.js?v=2"></script>
   </body>
 </html>
