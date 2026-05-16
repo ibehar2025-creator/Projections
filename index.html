@@ -423,6 +423,10 @@
               <p class="small-muted">Import a workbook, keep trades in sync, and refresh prices on demand.</p>
             </div>
             <div class="heading-actions">
+              <button class="ghost-button" id="connectDriveButton" type="button">Connect Drive</button>
+              <button class="ghost-button" id="syncPortfolioNowButton" type="button">Sync now</button>
+              <button class="ghost-button" id="loadDrivePortfolioButton" type="button">Load Drive copy</button>
+              <button class="ghost-button" id="disconnectDriveButton" type="button">Disconnect</button>
               <button class="ghost-button" id="downloadPortfolioTemplate" type="button">Template</button>
               <button class="ghost-button" id="importPortfolioButton" type="button">Import workbook</button>
               <button class="ghost-button" id="exportPortfolioButton" type="button">Export workbook</button>
@@ -433,6 +437,14 @@
           </div>
 
           <p class="inline-status" id="portfolioStatus"></p>
+          <div class="data-card">
+            <strong>Portfolio Sync</strong>
+            <p id="portfolioSyncMeta">Checking private Drive sync status...</p>
+            <div class="button-row" id="portfolioConflictActions" hidden>
+              <button class="secondary-button" id="reloadRemotePortfolioButton" type="button">Load newer Drive copy</button>
+              <button class="secondary-button" id="forceOverwriteRemoteButton" type="button">Overwrite Drive copy</button>
+            </div>
+          </div>
 
           <div class="metric-row" id="portfolioCards"></div>
 
