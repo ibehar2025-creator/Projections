@@ -330,11 +330,6 @@ textarea:focus {
   white-space: normal;
 }
 
-.scenario-table th:nth-child(5),
-.scenario-table td:nth-child(5) {
-  display: none;
-}
-
 .scenario-table th,
 .data-table th {
   color: var(--muted);
@@ -607,6 +602,35 @@ textarea:focus {
 .watch-card dd {
   margin: 3px 0 0;
   font-weight: 700;
+}
+
+.watch-note-field {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 14px;
+}
+
+.watch-note-field span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.watch-note-field textarea {
+  min-height: 104px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: rgba(11, 17, 27, 0.96);
+  resize: vertical;
+}
+
+.watch-note-field textarea:focus {
+  outline: none;
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.16);
 }
 
 .watch-actions,
