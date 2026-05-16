@@ -26,7 +26,7 @@ For the most reliable live prices and specs, add one or both environment variabl
 - `FINNHUB_API_KEY`
 - `ALPHA_VANTAGE_API_KEY`
 
-The app prefers Finnhub, then Alpha Vantage, then delayed no-key fallbacks. API keys stay server-side and are never exposed in the browser. Finnhub or Alpha Vantage is strongly recommended because no-key fallbacks may provide prices without full company specs such as EPS, revenue, margins, or share count.
+The app prefers Finnhub, then Alpha Vantage, then delayed no-key fallbacks. API keys stay server-side and are never exposed in the browser. When no key is configured, the app combines a delayed Stooq quote with SEC company facts for available US-listed fundamentals.
 
 ## Projection Method
 
