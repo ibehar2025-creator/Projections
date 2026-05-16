@@ -11,7 +11,7 @@
       rel="stylesheet"
     />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=3" />
     <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
@@ -87,7 +87,6 @@
                       <th>Sales growth</th>
                       <th>Net margin</th>
                       <th>Exit P/E</th>
-                      <th>Dilution / buyback</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -96,21 +95,18 @@
                       <td><input id="bearGrowth" type="number" step="0.1" value="3" />%</td>
                       <td><input id="bearMargin" type="number" step="0.1" value="18" />%</td>
                       <td><input id="bearPe" type="number" step="0.1" value="18" /></td>
-                      <td><input id="bearDilution" type="number" step="0.1" value="1" />%</td>
                     </tr>
                     <tr>
                       <td><span class="case-dot base"></span>Base</td>
                       <td><input id="baseGrowth" type="number" step="0.1" value="7" />%</td>
                       <td><input id="baseMargin" type="number" step="0.1" value="24" />%</td>
                       <td><input id="basePe" type="number" step="0.1" value="24" /></td>
-                      <td><input id="baseDilution" type="number" step="0.1" value="-1.5" />%</td>
                     </tr>
                     <tr>
                       <td><span class="case-dot bull"></span>Bull</td>
                       <td><input id="bullGrowth" type="number" step="0.1" value="11" />%</td>
                       <td><input id="bullMargin" type="number" step="0.1" value="28" />%</td>
                       <td><input id="bullPe" type="number" step="0.1" value="30" /></td>
-                      <td><input id="bullDilution" type="number" step="0.1" value="-2.5" />%</td>
                     </tr>
                   </tbody>
                 </table>
@@ -140,10 +136,17 @@
                 <article class="chart-card">
                   <div class="chart-header">
                     <div>
-                      <h2>Forward Projection</h2>
-                      <p class="small-muted">Click a year or drag across the path to inspect the scenarios.</p>
+                      <h2>Price Path</h2>
+                      <p class="small-muted">Historical pricing and forward scenarios share one timeline so you can inspect the handoff cleanly.</p>
                     </div>
                     <div class="chart-toolbar">
+                      <div class="segmented-group" data-chart-range-target="projectionHistorical">
+                        <button class="segmented-button" type="button" data-range="1m">1M</button>
+                        <button class="segmented-button" type="button" data-range="6m">6M</button>
+                        <button class="segmented-button" type="button" data-range="1y">1Y</button>
+                        <button class="segmented-button active" type="button" data-range="5y">5Y</button>
+                        <button class="segmented-button" type="button" data-range="max">Max</button>
+                      </div>
                       <div class="segmented-group" data-chart-mode-target="projectionForward">
                         <button class="segmented-button active" type="button" data-mode="measure">Measure</button>
                       </div>
@@ -153,38 +156,10 @@
                   <div class="chart-shell">
                     <canvas id="projectionForwardChart" height="180"></canvas>
                   </div>
-                  <div class="chart-readout" id="projectionForwardReadout">Forward projection details will appear here.</div>
+                  <div class="chart-readout" id="projectionForwardReadout">Price-path details will appear here.</div>
                 </article>
               </div>
             </aside>
-          </div>
-
-          <div class="chart-stack">
-            <article class="chart-card">
-              <div class="chart-header">
-                <div>
-                  <h2>Historical Price</h2>
-                  <p class="small-muted">Hover, click, zoom, or drag to measure performance.</p>
-                </div>
-                <div class="chart-toolbar">
-                  <div class="segmented-group" data-chart-range-target="projectionHistorical">
-                    <button class="segmented-button" type="button" data-range="1m">1M</button>
-                    <button class="segmented-button" type="button" data-range="6m">6M</button>
-                    <button class="segmented-button" type="button" data-range="1y">1Y</button>
-                    <button class="segmented-button active" type="button" data-range="5y">5Y</button>
-                    <button class="segmented-button" type="button" data-range="max">Max</button>
-                  </div>
-                  <div class="segmented-group" data-chart-mode-target="projectionHistorical">
-                    <button class="segmented-button active" type="button" data-mode="measure">Measure</button>
-                  </div>
-                  <button class="ghost-button" type="button" data-chart-reset="projectionHistorical">Reset</button>
-                </div>
-              </div>
-              <div class="chart-shell">
-                <canvas id="projectionHistoricalChart" height="180"></canvas>
-              </div>
-              <div class="chart-readout" id="projectionHistoricalReadout">Historical chart details will appear here.</div>
-            </article>
           </div>
         </section>
 
@@ -596,6 +571,7 @@
       </main>
     </div>
 
-    <script src="script.js?v=4"></script>
+    <script src="script.js?v=5"></script>
+    <script src="projection-chart-patch.js?v=1"></script>
   </body>
 </html>
