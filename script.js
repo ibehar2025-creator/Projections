@@ -242,6 +242,21 @@ function loadWatchlist() {
   appState.watchlist = parseJsonStorage(storageKeys.watchlist, []);
 }
 
+async function loadPortfolioSeedIfAvailable() {
+  try {
+    const response = await fetch("/portfolio-seed.json", { cache: "no-store" });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    if (!payload || !Array.isArray(payload.trades)) return null;
+    return {
+      trades: payload.trades.map(normalizeImportedTrade),
+      holdings: Array.isArray(payload.holdings) ? payload.holdings.map(normalizeSeedHolding) : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchJson(url) {
   const response = await fetch(url);
   const data = await response.json().catch(() => ({}));
@@ -699,98 +714,189 @@ function drawProjectionForwardChart(result) {
       label: item.label,
       borderColor: item.color,
       backgroundColor: `${item.color}33`,
-      data: item.yearly.map((point) => ({ x: point.year, y: point.price })),
-      pointRadius: 2,
-      pointHoverRadius: 4,
-      borderWidth: 2.5,
-      fill: false,
+      data: item.yearly.map((point) => ({ x: point.year, y: point.price, ...point })),
+      borderWidth: 2.4,
     })),
   });
-  setChartReadout("projectionForwardReadout", "Forward projection details will appear here.");
+
+  const baseTerminal = result.cases.find((item) => item.key === "base")?.terminal;
+  if (baseTerminal) {
+    setChartReadout(
+      "projectionForwardReadout",
+      `Base case year ${baseTerminal.year}: ${formatDollarValue(baseTerminal.price)} target | ${formatPercent(
+        result.cases.find((item) => item.key === "base").cagr,
+      )} annualized`,
+    );
+  }
 }
 
-async function loadProjectionHistoricalChart(symbol, range = "5y") {
-  const history = await fetchHistoricalData(symbol, range);
+async function loadProjectionHistoricalChart(symbol, range) {
+  const historical = await fetchHistoricalData(symbol, range);
+  const series = (historical.prices || []).map((point) => ({
+    x: point.date,
+    y: Number(point.close),
+  }));
+
+  if (!series.length) {
+    throw new Error("No historical data available.");
+  }
+
   createLineChart("projectionHistorical", "projectionHistoricalChart", {
     readoutId: "projectionHistoricalReadout",
-    xFormatter: (value) => formatDate(value),
     xTime: true,
+    xFormatter: (value) => formatDate(value),
     datasets: [
       {
-        label: `${history.symbol} price`,
+        label: symbol.toUpperCase(),
         borderColor: "#4f8cff",
-        backgroundColor: "rgba(79, 140, 255, 0.18)",
-        data: history.points.map((point) => ({ x: point.date, y: point.close })),
-        pointRadius: 0,
-        borderWidth: 2,
+        backgroundColor: "rgba(79, 140, 255, 0.22)",
+        data: series,
+        borderWidth: 2.4,
       },
     ],
   });
+
+  const first = series[0];
+  const last = series[series.length - 1];
+  const change = first?.y ? (last.y - first.y) / first.y : 0;
   setChartReadout(
     "projectionHistoricalReadout",
-    `${history.symbol} ${history.rangeLabel} history loaded. Click or drag to inspect exact points.`,
+    `${symbol.toUpperCase()} ${range.toUpperCase()} history loaded. Click or drag to inspect exact points.`,
   );
+  return change;
 }
 
-function buildCompareProjectionData() {
-  const years = Math.max(1, Math.min(15, numberValue("compareYears")));
-  return ["A", "B"].map((slot, index) => {
-    const ticker = el(`compare${slot}Ticker`).value.trim().toUpperCase() || `STOCK ${slot}`;
-    const price = numberValue(`compare${slot}Price`);
-    const eps = numberValue(`compare${slot}Eps`);
-    const growth = numberValue(`compare${slot}Growth`) / 100;
-    const pe = numberValue(`compare${slot}Pe`);
-    const yearly = [];
-    for (let year = 0; year <= years; year += 1) {
-      const futureEps = eps * Math.pow(1 + growth, year);
-      const futurePrice = futureEps * pe;
-      yearly.push({ x: year, y: futurePrice, year, price: futurePrice });
-    }
-    const terminal = yearly[yearly.length - 1].y;
-    const cagr = price > 0 && terminal > 0 ? Math.pow(terminal / price, 1 / years) - 1 : 0;
-    return {
-      key: slot,
-      label: ticker,
-      color: index === 0 ? "#4f8cff" : "#3ecf8e",
-      yearly,
-      terminal,
-      cagr,
-      returnMultiple: price > 0 ? terminal / price : 0,
-      currentPrice: price,
-    };
-  });
+function readCompareInputs() {
+  return {
+    years: Math.max(1, Math.min(15, Number(el("compareYears").value) || 5)),
+    a: {
+      ticker: el("compareATicker").value.trim().toUpperCase() || "AAPL",
+      price: Number(el("compareAPrice").value) || 0,
+      eps: Number(el("compareAEps").value) || 0,
+      growth: (Number(el("compareAGrowth").value) || 0) / 100,
+      pe: Number(el("compareAPe").value) || 0,
+    },
+    b: {
+      ticker: el("compareBTicker").value.trim().toUpperCase() || "MSFT",
+      price: Number(el("compareBPrice").value) || 0,
+      eps: Number(el("compareBEps").value) || 0,
+      growth: (Number(el("compareBGrowth").value) || 0) / 100,
+      pe: Number(el("compareBPe").value) || 0,
+    },
+  };
+}
+
+function calcCompareProjection(stock, years) {
+  const points = [];
+  for (let year = 0; year <= years; year += 1) {
+    const eps = stock.eps * Math.pow(1 + stock.growth, year);
+    const price = eps * stock.pe;
+    const multiple = stock.price > 0 ? price / stock.price : 0;
+    points.push({ x: year, y: price, eps, price, multiple });
+  }
+  const terminal = points[points.length - 1];
+  const cagr = stock.price > 0 && terminal.price > 0 ? Math.pow(terminal.price / stock.price, 1 / years) - 1 : 0;
+  return { stock, points, terminal, cagr };
 }
 
 function runCompare() {
-  const stocks = buildCompareProjectionData();
-  el("compareCards").innerHTML = stocks
+  const inputs = readCompareInputs();
+  const a = calcCompareProjection(inputs.a, inputs.years);
+  const b = calcCompareProjection(inputs.b, inputs.years);
+
+  el("compareCards").innerHTML = [a, b]
     .map(
-      (stock) => `
+      (item) => `
         <article class="metric-card">
-          <span>${stock.label}</span>
-          <strong>${formatDollarValue(stock.terminal)}</strong>
-          <p>${formatPercent(stock.cagr)} annualized, ${stock.returnMultiple.toFixed(2)}x ending value</p>
+          <span>${item.stock.ticker}</span>
+          <strong>${formatDollarValue(item.terminal.price)}</strong>
+          <p>${formatPercent(item.cagr)} annualized | ${item.terminal.multiple.toFixed(2)}x expected value</p>
         </article>
       `,
     )
     .join("");
 
+  drawCompareForwardChart(a, b);
+  return { a, b, inputs };
+}
+
+function drawCompareForwardChart(a, b) {
   createLineChart("compareForward", "compareForwardChart", {
     readoutId: "compareForwardReadout",
     xFormatter: (value) => `Year ${value}`,
-    datasets: stocks.map((stock) => ({
-      label: stock.label,
-      borderColor: stock.color,
-      backgroundColor: `${stock.color}33`,
-      data: stock.yearly,
-      pointRadius: 2,
-      pointHoverRadius: 4,
-      borderWidth: 2.4,
-    })),
+    datasets: [
+      {
+        label: a.stock.ticker,
+        borderColor: "#4f8cff",
+        backgroundColor: "rgba(79, 140, 255, 0.2)",
+        data: a.points,
+        borderWidth: 2.4,
+      },
+      {
+        label: b.stock.ticker,
+        borderColor: "#f4b74e",
+        backgroundColor: "rgba(244, 183, 78, 0.18)",
+        data: b.points,
+        borderWidth: 2.4,
+      },
+    ],
   });
 
-  setChartReadout("compareForwardReadout", "Forward comparison details will appear here.");
-  appState.compareForward = stocks;
+  setChartReadout(
+    "compareForwardReadout",
+    `${a.stock.ticker} vs ${b.stock.ticker}: inspect the projected paths to compare ending values and compounding.`,
+  );
+}
+
+function normalizeHistoricalSeries(rawPrices) {
+  if (!Array.isArray(rawPrices) || !rawPrices.length) return [];
+  const base = Number(rawPrices[0].close) || 0;
+  return rawPrices.map((point) => ({
+    x: point.date,
+    y: base > 0 ? (Number(point.close) / base) * 100 : 0,
+    close: Number(point.close),
+  }));
+}
+
+async function loadCompareHistoricalChart(range = "5y") {
+  const { a, b } = readCompareInputs();
+  const [aData, bData] = await Promise.all([fetchHistoricalData(a.ticker, range), fetchHistoricalData(b.ticker, range)]);
+  appState.compareHistorical = { a: aData, b: bData };
+
+  const seriesA = normalizeHistoricalSeries(aData.prices || []);
+  const seriesB = normalizeHistoricalSeries(bData.prices || []);
+
+  if (!seriesA.length || !seriesB.length) {
+    throw new Error("Historical comparison data is unavailable.");
+  }
+
+  createLineChart("compareHistorical", "compareHistoricalChart", {
+    readoutId: "compareHistoricalReadout",
+    xTime: true,
+    xFormatter: (value) => formatDate(value),
+    yAxisLabelPrefix: "",
+    datasets: [
+      {
+        label: a.ticker,
+        borderColor: "#4f8cff",
+        backgroundColor: "rgba(79, 140, 255, 0.22)",
+        data: seriesA,
+        borderWidth: 2.4,
+      },
+      {
+        label: b.ticker,
+        borderColor: "#f4b74e",
+        backgroundColor: "rgba(244, 183, 78, 0.18)",
+        data: seriesB,
+        borderWidth: 2.4,
+      },
+    ],
+  });
+
+  setChartReadout(
+    "compareHistoricalReadout",
+    `${a.ticker} and ${b.ticker} normalized over ${range.toUpperCase()}. Click or drag to compare any period.`,
+  );
 }
 
 async function fetchCompareTickers() {
@@ -798,280 +904,110 @@ async function fetchCompareTickers() {
   button.disabled = true;
   button.textContent = "Fetching...";
   try {
-    const [a, b] = await Promise.all([
-      fetchStockData(el("compareATicker").value),
-      fetchStockData(el("compareBTicker").value),
-    ]);
+    const [a, b] = await Promise.all([fetchStockData(el("compareATicker").value), fetchStockData(el("compareBTicker").value)]);
+    el("compareATicker").value = a.symbol;
+    el("compareAPrice").value = Number(a.price || 0).toFixed(2);
+    el("compareAEps").value = Number(a.eps || 0).toFixed(2);
+    el("compareAGrowth").value = a.epsGrowth5y ?? 9;
+    el("compareAPe").value = Number(a.peTtm || 22).toFixed(1);
 
-    fillCompareSlot("A", a);
-    fillCompareSlot("B", b);
-    await loadCompareHistoricalChart(appState.compareHistoryRange);
-    setDataStatus("Compare data loaded");
+    el("compareBTicker").value = b.symbol;
+    el("compareBPrice").value = Number(b.price || 0).toFixed(2);
+    el("compareBEps").value = Number(b.eps || 0).toFixed(2);
+    el("compareBGrowth").value = b.epsGrowth5y ?? 12;
+    el("compareBPe").value = Number(b.peTtm || 24).toFixed(1);
+
     runCompare();
-  } catch (error) {
-    setDataStatus("Compare fetch failed");
-    alert(error.message);
+    await loadCompareHistoricalChart(appState.compareHistoryRange);
   } finally {
     button.disabled = false;
     button.textContent = "Fetch A & B";
   }
 }
 
-function fillCompareSlot(slot, data) {
-  el(`compare${slot}Ticker`).value = data.symbol;
-  if (Number.isFinite(data.price)) el(`compare${slot}Price`).value = data.price.toFixed(2);
-  if (Number.isFinite(data.eps)) el(`compare${slot}Eps`).value = data.eps.toFixed(2);
-  if (Number.isFinite(data.peTtm)) el(`compare${slot}Pe`).value = data.peTtm.toFixed(1);
-}
-
-async function loadCompareHistoricalChart(range = "5y") {
-  const tickerA = el("compareATicker").value.trim().toUpperCase();
-  const tickerB = el("compareBTicker").value.trim().toUpperCase();
-  const [a, b] = await Promise.all([fetchHistoricalData(tickerA, range), fetchHistoricalData(tickerB, range)]);
-  appState.compareHistorical = { a, b };
-
-  const normalize = (points) => {
-    const first = points.find((point) => Number.isFinite(point.close))?.close || 1;
-    return points.map((point) => ({
-      x: point.date,
-      y: (point.close / first) * 100,
-      close: point.close,
-    }));
-  };
-
-  createLineChart("compareHistorical", "compareHistoricalChart", {
-    readoutId: "compareHistoricalReadout",
-    xFormatter: (value) => formatDate(value),
-    xTime: true,
-    datasets: [
-      {
-        label: `${a.symbol} indexed`,
-        borderColor: "#4f8cff",
-        backgroundColor: "rgba(79, 140, 255, 0.18)",
-        data: normalize(a.points),
-        pointRadius: 0,
-        borderWidth: 2,
-      },
-      {
-        label: `${b.symbol} indexed`,
-        borderColor: "#3ecf8e",
-        backgroundColor: "rgba(62, 207, 142, 0.16)",
-        data: normalize(b.points),
-        pointRadius: 0,
-        borderWidth: 2,
-      },
-    ],
-  });
-
-  const chart = appState.charts.compareHistorical?.chart;
-  if (chart) {
-    chart.options.scales.y.ticks.callback = (value) => `${value.toFixed(0)}`;
-    chart.options.plugins.tooltip.callbacks.label = (context) =>
-      `${context.dataset.label}: ${context.parsed.y.toFixed(1)} indexed`;
-    chart.update("none");
-  }
-
-  setChartReadout(
-    "compareHistoricalReadout",
-    `${a.symbol} and ${b.symbol} ${a.rangeLabel} history loaded and normalized to 100 at the starting point.`,
-  );
-}
-
-function saveProjection() {
-  const result = appState.lastProjection || runProjection();
-  const base = result.cases.find((item) => item.key === "base");
-  const existingIndex = appState.watchlist.findIndex((item) => item.ticker === result.input.ticker);
-  const payload = {
-    ticker: result.input.ticker,
-    savedAt: new Date().toISOString(),
-    currentPrice: result.input.currentPrice,
-    bear: result.cases.find((item) => item.key === "bear")?.terminal.price || 0,
-    base: base.terminal.price,
-    bull: result.cases.find((item) => item.key === "bull")?.terminal.price || 0,
-    baseCagr: base.cagr,
-    years: result.input.years,
-    inputs: serializeProjectionInputs(),
-  };
-
-  if (existingIndex >= 0) {
-    appState.watchlist.splice(existingIndex, 1, payload);
-  } else {
-    appState.watchlist.unshift(payload);
-  }
-  appState.watchlist = appState.watchlist.slice(0, 40);
-  persistWatchlist();
-  renderWatchlist();
-  setInlineStatus("projectionSaveStatus", `${payload.ticker} saved to watchlist.`, "positive");
-}
-
-function serializeProjectionInputs() {
-  const values = {};
-  [
-    "ticker",
-    "currentPrice",
-    "revenue",
-    "shares",
-    "eps",
-    "years",
-    "bearGrowth",
-    "bearMargin",
-    "bearPe",
-    "bearDilution",
-    "baseGrowth",
-    "baseMargin",
-    "basePe",
-    "baseDilution",
-    "bullGrowth",
-    "bullMargin",
-    "bullPe",
-    "bullDilution",
-  ].forEach((id) => {
-    values[id] = el(id).value;
-  });
-  return values;
-}
-
-function restoreProjectionInputs(values) {
-  Object.entries(values || {}).forEach(([id, value]) => {
-    if (el(id)) {
-      el(id).value = value;
-    }
-  });
-}
-
-function renderWatchlist() {
-  const container = el("watchlistGrid");
-  if (!appState.watchlist.length) {
-    container.innerHTML = '<div class="empty-state">No saved projections yet. Save one from the Projection tab and it will show up here.</div>';
-    return;
-  }
-
-  container.innerHTML = appState.watchlist
-    .map(
-      (item, index) => `
-        <article class="watch-card">
-          <h3>${item.ticker}</h3>
-          <p class="small-muted">Saved ${formatDate(item.savedAt)} from ${formatDollarValue(item.currentPrice)}</p>
-          <dl>
-            <div><dt>Bear</dt><dd>${formatDollarValue(item.bear)}</dd></div>
-            <div><dt>Base</dt><dd>${formatDollarValue(item.base)}</dd></div>
-            <div><dt>Bull</dt><dd>${formatDollarValue(item.bull)}</dd></div>
-            <div><dt>Base CAGR</dt><dd>${formatPercent(item.baseCagr)}</dd></div>
-          </dl>
-          <div class="watch-actions">
-            <button class="tiny-button" type="button" data-watch-action="load" data-watch-index="${index}">Load</button>
-            <button class="tiny-button danger" type="button" data-watch-action="delete" data-watch-index="${index}">Delete</button>
-          </div>
-        </article>
-      `,
-    )
-    .join("");
-}
-
 function runReverse() {
-  const price = numberValue("revPrice");
-  const eps = numberValue("revEps");
-  const pe = numberValue("revPe");
-  const years = Math.max(1, numberValue("revYears"));
-  const impliedFutureEps = pe > 0 ? price / pe : 0;
-  const growth = eps > 0 && impliedFutureEps > 0 ? Math.pow(impliedFutureEps / eps, 1 / years) - 1 : 0;
+  const price = Number(el("revPrice").value) || 0;
+  const eps = Number(el("revEps").value) || 0;
+  const pe = Number(el("revPe").value) || 0;
+  const years = Math.max(1, Number(el("revYears").value) || 5);
+
+  const targetEps = pe > 0 ? price / pe : 0;
+  const impliedGrowth = eps > 0 && targetEps > 0 ? Math.pow(targetEps / eps, 1 / years) - 1 : 0;
+
   el("reverseAnswer").innerHTML = `
-    <strong>${formatPercent(growth)}</strong>
-    The current price implies roughly ${formatPercent(growth)} annual EPS growth for the next ${years} year${years === 1 ? "" : "s"} if the stock exits at ${pe.toFixed(1)}x earnings.
+    <strong>Implied EPS growth:</strong> ${formatPercent(impliedGrowth)} annually<br />
+    <span class="small-muted">That is the growth rate needed for EPS to justify today&apos;s price at a ${oneDecimal.format(pe)}x exit multiple in ${years} years.</span>
   `;
 }
 
 function runMos() {
-  const fairValue = numberValue("fairValue");
-  const currentPrice = numberValue("mosPrice");
-  const safety = numberValue("mosPercent") / 100;
-  const buyBelow = fairValue * (1 - safety);
-  const upside = currentPrice > 0 ? fairValue / currentPrice - 1 : 0;
+  const fairValue = Number(el("fairValue").value) || 0;
+  const currentPrice = Number(el("mosPrice").value) || 0;
+  const required = (Number(el("mosPercent").value) || 0) / 100;
+  const targetBuy = fairValue * (1 - required);
+  const currentDiscount = fairValue > 0 ? 1 - currentPrice / fairValue : 0;
+
   el("mosAnswer").innerHTML = `
-    <strong>${formatDollarValue(buyBelow)}</strong>
-    If your fair value estimate is ${formatDollarValue(fairValue)}, a ${wholeNumber.format(safety * 100)}% margin of safety means your buy zone is ${formatDollarValue(buyBelow)} or below. That leaves ${formatPercent(upside)} upside to fair value from the current price.
+    <strong>Target buy price:</strong> ${formatDollarValue(targetBuy)}<br />
+    <strong>Current discount to fair value:</strong> ${formatPercent(currentDiscount)}<br />
+    <span class="small-muted">This compares your desired margin of safety to the current market price.</span>
   `;
 }
 
-function runSize() {
-  const portfolio = numberValue("portfolioValue");
-  const risk = numberValue("riskPercent") / 100;
-  const entry = numberValue("entryPrice");
-  const stop = numberValue("stopPrice");
-  const dollarsAtRisk = portfolio * risk;
-  const perShareRisk = Math.max(entry - stop, 0);
-  const shares = perShareRisk > 0 ? Math.floor(dollarsAtRisk / perShareRisk) : 0;
-  const position = shares * entry;
-  el("sizeAnswer").innerHTML = `
-    <strong>${wholeNumber.format(shares)} shares</strong>
-    That position would be about ${formatDollarValue(position)} in capital, with roughly ${formatDollarValue(dollarsAtRisk)} at risk if your stop is hit.
-  `;
-}
-
-function calculateSp500Projection() {
-  const start = numberValue("spStart");
-  const monthly = numberValue("spMonthly");
-  const annualRate = numberValue("spRate") / 100;
-  const years = Math.max(1, Math.min(50, numberValue("spYears")));
+function computeSp500Series() {
+  const start = Number(el("spStart").value) || 0;
+  const monthly = Number(el("spMonthly").value) || 0;
+  const annualRate = (Number(el("spRate").value) || 0) / 100;
+  const years = Math.max(1, Number(el("spYears").value) || 10);
   const monthlyRate = annualRate / 12;
 
   let current = start;
-  let totalContributed = start;
-  let totalGrowth = 0;
-  const yearlyRows = [];
-  const chartPoints = [{ x: 0, y: start }];
+  const rows = [{ year: 0, startValue: start, contributions: 0, growth: 0, endValue: start }];
 
   for (let year = 1; year <= years; year += 1) {
-    const startValue = current;
-    let contributionsThisYear = 0;
+    const yearStart = current;
+    let contributions = 0;
     for (let month = 0; month < 12; month += 1) {
-      current = current * (1 + monthlyRate) + monthly;
-      contributionsThisYear += monthly;
+      current += monthly;
+      contributions += monthly;
+      current *= 1 + monthlyRate;
     }
-    totalContributed += contributionsThisYear;
-    totalGrowth = current - totalContributed;
-    yearlyRows.push({
+    const yearEnd = current;
+    rows.push({
       year,
-      startValue,
-      contributions: contributionsThisYear,
-      growth: current - startValue - contributionsThisYear,
-      endingValue: current,
+      startValue: yearStart,
+      contributions,
+      growth: yearEnd - yearStart - contributions,
+      endValue: yearEnd,
     });
-    chartPoints.push({ x: year, y: current });
   }
 
-  return {
-    start,
-    monthly,
-    annualRate,
-    years,
-    totalContributed,
-    totalGrowth,
-    endingValue: current,
-    yearlyRows,
-    chartPoints,
-  };
+  return rows;
 }
 
 function renderSp500() {
-  const result = calculateSp500Projection();
+  const rows = computeSp500Series();
+  const ending = rows[rows.length - 1].endValue;
+  const totalContrib = rows.reduce((sum, row) => sum + row.contributions, 0) + rows[0].startValue;
+  const totalGrowth = ending - totalContrib;
+
   el("sp500Cards").innerHTML = [
-    ["Ending value", formatDollarValue(result.endingValue), `${result.years} year ending balance`],
-    ["Total contributions", formatDollarValue(result.totalContributed), "Starting amount plus monthly adds"],
-    ["Total growth", formatDollarValue(result.totalGrowth), `${formatPercent(result.totalGrowth / Math.max(result.totalContributed, 1))} over contributions`],
+    ["Ending value", formatDollarValue(ending), `${rows.length - 1} years`],
+    ["Total contributed", formatDollarValue(totalContrib), "Start + monthly adds"],
+    ["Total growth", formatDollarValue(totalGrowth), "Compounding gains", classForValue(totalGrowth)],
   ]
     .map(
-      ([label, value, copy]) => `
-        <article class="metric-card">
+      ([label, value, sub, tone]) => `
+        <article class="metric-card ${tone || ""}">
           <span>${label}</span>
           <strong>${value}</strong>
-          <p>${copy}</p>
+          <p>${sub}</p>
         </article>
       `,
     )
     .join("");
 
-  el("sp500Table").innerHTML = result.yearlyRows
+  el("sp500Table").innerHTML = rows
     .map(
       (row) => `
         <tr>
@@ -1079,7 +1015,7 @@ function renderSp500() {
           <td>${formatDollarValue(row.startValue)}</td>
           <td>${formatDollarValue(row.contributions)}</td>
           <td>${formatDollarValue(row.growth)}</td>
-          <td>${formatDollarValue(row.endingValue)}</td>
+          <td>${formatDollarValue(row.endValue)}</td>
         </tr>
       `,
     )
@@ -1091,16 +1027,91 @@ function renderSp500() {
     datasets: [
       {
         label: "Portfolio value",
-        borderColor: "#4f8cff",
-        backgroundColor: "rgba(79, 140, 255, 0.18)",
-        data: result.chartPoints,
-        pointRadius: 2,
-        pointHoverRadius: 4,
-        borderWidth: 2.5,
+        borderColor: "#3ecf8e",
+        backgroundColor: "rgba(62, 207, 142, 0.18)",
+        data: rows.map((row) => ({ x: row.year, y: row.endValue, ...row })),
+        borderWidth: 2.4,
       },
     ],
   });
-  setChartReadout("sp500Readout", "S&P chart details will appear here.");
+
+  setChartReadout("sp500Readout", `Ending value after ${rows.length - 1} years: ${formatDollarValue(ending)}.`);
+}
+
+function restoreProjectionInputs(inputs) {
+  if (!inputs) return;
+  el("ticker").value = inputs.ticker;
+  el("currentPrice").value = inputs.currentPrice;
+  el("revenue").value = inputs.revenue;
+  el("shares").value = inputs.shares;
+  el("eps").value = inputs.eps;
+  el("years").value = inputs.years;
+  scenarioConfig.forEach((scenario) => {
+    const assumptions = inputs.cases[scenario.key];
+    el(`${scenario.key}Growth`).value = assumptions.growth * 100;
+    el(`${scenario.key}Margin`).value = assumptions.margin * 100;
+    el(`${scenario.key}Pe`).value = assumptions.pe;
+    el(`${scenario.key}Dilution`).value = assumptions.dilution * 100;
+  });
+}
+
+function saveProjection() {
+  const result = appState.lastProjection || runProjection();
+  const payload = {
+    ticker: result.input.ticker,
+    savedAt: new Date().toISOString(),
+    inputs: result.input,
+    bear: result.cases.find((item) => item.key === "bear")?.terminal?.price || 0,
+    base: result.cases.find((item) => item.key === "base")?.terminal?.price || 0,
+    bull: result.cases.find((item) => item.key === "bull")?.terminal?.price || 0,
+    baseCagr: result.cases.find((item) => item.key === "base")?.cagr || 0,
+    currentPrice: result.input.currentPrice,
+  };
+
+  const existingIndex = appState.watchlist.findIndex((item) => item.ticker === result.input.ticker);
+  if (existingIndex >= 0) {
+    appState.watchlist.splice(existingIndex, 1, payload);
+  } else {
+    appState.watchlist.unshift(payload);
+  }
+  appState.watchlist = appState.watchlist.slice(0, 40);
+  persistWatchlist();
+  renderWatchlist();
+  setInlineStatus("projectionSaveStatus", `${payload.ticker} saved to watchlist.`, "positive");
+}
+
+function renderWatchlist() {
+  const container = el("watchlistGrid");
+  if (!appState.watchlist.length) {
+    container.innerHTML = `<article class="empty-card">Save a projection to start building your watchlist.</article>`;
+    return;
+  }
+
+  container.innerHTML = appState.watchlist
+    .map(
+      (item, index) => `
+        <article class="watch-card">
+          <div class="watch-card-top">
+            <div>
+              <strong>${item.ticker}</strong>
+              <p class="small-muted">Saved ${formatDate(item.savedAt)}</p>
+            </div>
+            <span class="watch-price">${formatDollarValue(item.currentPrice)}</span>
+          </div>
+          <div class="watch-grid">
+            <div><span>Bear</span><b>${formatDollarValue(item.bear)}</b></div>
+            <div><span>Base</span><b>${formatDollarValue(item.base)}</b></div>
+            <div><span>Bull</span><b>${formatDollarValue(item.bull)}</b></div>
+            <div><span>Base CAGR</span><b>${formatPercent(item.baseCagr)}</b></div>
+          </div>
+          <div class="button-row compact-row">
+            <button class="primary-button" type="button" data-watch-action="load" data-watch-index="${index}">Load</button>
+            <button class="secondary-button" type="button" data-watch-action="delete" data-watch-index="${index}">Delete</button>
+          </div>
+        </article>
+      `,
+    )
+    .join("");
 }
 
 function getPortfolioWorkbookData() {
@@ -1272,11 +1283,11 @@ function renderPortfolioCards(holdings) {
     ["Realized P/L", formatDollarValue(totals.realizedProfit), "Closed gains and losses", classForValue(totals.realizedProfit)],
   ]
     .map(
-      ([label, value, copy, extraClass = ""]) => `
-        <article class="metric-card">
+      ([label, value, sub, tone]) => `
+        <article class="metric-card ${tone || ""}">
           <span>${label}</span>
-          <strong class="${extraClass}">${value}</strong>
-          <p>${copy}</p>
+          <strong>${value}</strong>
+          <p>${sub}</p>
         </article>
       `,
     )
@@ -1548,6 +1559,24 @@ function normalizeImportedHolding(row) {
   };
 }
 
+function normalizeSeedHolding(row) {
+  return {
+    symbol: String(row.symbol || row.Symbol || "").trim().toUpperCase(),
+    asset: String(row.asset || row.Asset || "").trim(),
+    sector: String(row.sector || row.Sector || "Unassigned").trim(),
+    quantity: Number(row.quantity ?? row.Quantity) || 0,
+    averageCost: Number(row.averageCost ?? row["Average Cost"]) || 0,
+    initialValue: Number(row.initialValue ?? row["Initial Value"]) || 0,
+    account: String(row.account || row.Account || "Primary").trim(),
+    realizedProfit: Number(row.realizedProfit ?? row["Realized Profit"]) || 0,
+    currentPrice: Number(row.currentPrice ?? row["Current Price"]) || 0,
+    currentValue: Number(row.currentValue ?? row["Current Value"]) || 0,
+    dayChange: Number(row.dayChange ?? row["Day Change"]) || 0,
+    dayPercentChange: Number(row.dayPercentChange ?? row["Day % Change"]) || 0,
+    unrealizedProfit: Number(row.unrealizedProfit ?? row["Unrealized Profit"]) || 0,
+  };
+}
+
 function normalizeImportDate(value) {
   if (!value) return new Date().toISOString().slice(0, 10);
   if (typeof value === "number") {
@@ -1813,7 +1842,6 @@ function bindEvents() {
   el("fetchCompare").addEventListener("click", fetchCompareTickers);
   el("runReverse").addEventListener("click", runReverse);
   el("runMos").addEventListener("click", runMos);
-  el("runSize").addEventListener("click", runSize);
   el("sp500Form").addEventListener("submit", (event) => {
     event.preventDefault();
     renderSp500();
@@ -1845,9 +1873,10 @@ function runProjection() {
   return result;
 }
 
-function seedPortfolioIfEmpty() {
+async function seedPortfolioIfEmpty() {
   if (appState.portfolio.trades.length) return;
-  appState.portfolio = structuredClone(portfolioTemplate);
+  const seeded = await loadPortfolioSeedIfAvailable();
+  appState.portfolio = seeded || structuredClone(portfolioTemplate);
   persistPortfolioState();
 }
 
@@ -1860,17 +1889,18 @@ async function init() {
   });
 
   loadWatchlist();
-  seedPortfolioIfEmpty();
+  await seedPortfolioIfEmpty();
   bindEvents();
   resetTradeForm();
   runProjection();
   runCompare();
   runReverse();
   runMos();
-  runSize();
   renderSp500();
   renderWatchlist();
-  appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
+  if (!appState.portfolio.holdings.length) {
+    appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
+  }
   renderPortfolio();
   toggleCompareView("historical");
 
