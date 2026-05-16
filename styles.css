@@ -297,7 +297,10 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.16);
 }
 
-.scenario-table-wrap,
+.scenario-table-wrap {
+  overflow: visible;
+}
+
 .table-shell {
   overflow: auto;
 }
@@ -309,7 +312,8 @@ textarea:focus {
 }
 
 .scenario-table {
-  min-width: 720px;
+  min-width: 0;
+  table-layout: fixed;
 }
 
 .scenario-table th,
@@ -319,7 +323,16 @@ textarea:focus {
   padding: 10px 8px;
   border-bottom: 1px solid var(--line-soft);
   text-align: left;
-  white-space: nowrap;
+}
+
+.scenario-table th,
+.scenario-table td {
+  white-space: normal;
+}
+
+.scenario-table th:nth-child(5),
+.scenario-table td:nth-child(5) {
+  display: none;
 }
 
 .scenario-table th,
