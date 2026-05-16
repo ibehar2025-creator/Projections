@@ -125,6 +125,7 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(16, 24, 37, 0.88);
+  scrollbar-width: thin;
 }
 
 .tab {
@@ -303,6 +304,7 @@ textarea:focus {
 
 .table-shell {
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .scenario-table,
@@ -702,8 +704,9 @@ textarea:focus {
 
 @media (max-width: 760px) {
   .app-shell {
-    width: min(100vw - 20px, 720px);
-    padding-top: 14px;
+    width: min(100vw - 16px, 720px);
+    padding-top: 12px;
+    padding-bottom: 24px;
   }
 
   .topbar,
@@ -720,6 +723,36 @@ textarea:focus {
     text-align: left;
   }
 
+  h1 {
+    font-size: 2.05rem;
+    line-height: 0.98;
+  }
+
+  h2 {
+    font-size: 1rem;
+  }
+
+  .eyebrow {
+    margin-bottom: 6px;
+    font-size: 0.7rem;
+  }
+
+  .tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    overflow: visible;
+    padding: 6px;
+  }
+
+  .tab {
+    min-width: 0;
+    width: 100%;
+    height: 40px;
+    padding: 0 10px;
+    font-size: 0.82rem;
+  }
+
   .input-grid,
   .two-col,
   .spec-grid,
@@ -727,19 +760,154 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
-  .chart-shell {
-    min-height: 260px;
-    height: 260px;
+  .metric-row,
+  .metric-row-two,
+  .details-grid,
+  .chart-grid-two,
+  .tools-grid {
+    grid-template-columns: 1fr;
   }
 
-  .tab {
-    min-width: 104px;
+  .heading-actions,
+  .chart-toolbar,
+  .button-row,
+  .watch-actions,
+  .table-actions {
+    width: 100%;
+  }
+
+  .heading-actions > *,
+  .button-row > *,
+  .watch-actions > *,
+  .table-actions > * {
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
+  }
+
+  .chart-toolbar {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .segmented-group {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(54px, 1fr));
+    width: 100%;
+  }
+
+  .chart-shell {
+    min-height: 220px;
+    height: 220px;
+  }
+
+  .scenario-table {
+    min-width: 520px;
+  }
+
+  .scenario-table input {
+    width: 74px;
   }
 
   .tool-panel,
   .results-panel,
   .chart-card,
   .table-card {
-    padding: 14px;
+    padding: 12px;
+  }
+
+  .metric-card,
+  .detail-card,
+  .watch-card,
+  .answer-box,
+  .data-card {
+    padding: 12px;
+  }
+
+  .metric-card strong {
+    font-size: 1.55rem;
+  }
+
+  .chart-readout {
+    min-height: 0;
+    font-size: 0.82rem;
+    padding: 10px;
+  }
+
+  .portfolio-header .heading-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-header .heading-actions > * {
+    width: 100%;
+  }
+
+  .watch-card dl {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 520px) {
+  .app-shell {
+    width: calc(100vw - 12px);
+    padding-top: 10px;
+  }
+
+  body {
+    font-size: 15px;
+  }
+
+  h1 {
+    font-size: 1.8rem;
+  }
+
+  .tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tab {
+    height: 38px;
+    font-size: 0.78rem;
+    padding: 0 8px;
+  }
+
+  .heading-actions > *,
+  .button-row > *,
+  .watch-actions > *,
+  .table-actions > * {
+    flex-basis: 100%;
+  }
+
+  .portfolio-header .heading-actions,
+  .chart-toolbar,
+  .segmented-group {
+    grid-template-columns: 1fr;
+  }
+
+  input,
+  select {
+    height: 40px;
+    padding: 0 10px;
+  }
+
+  .metric-card strong {
+    font-size: 1.4rem;
+  }
+
+  .chart-shell {
+    min-height: 200px;
+    height: 200px;
+  }
+
+  .scenario-table {
+    min-width: 480px;
+  }
+
+  .small-muted,
+  .tool-copy,
+  .inline-help {
+    font-size: 0.8rem;
   }
 }
