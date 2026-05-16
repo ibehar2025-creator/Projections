@@ -41,6 +41,9 @@ const historyRangeConfig = {
   max: { range: "max", interval: "1wk", label: "Max" },
 };
 
+const quoteCache = new Map();
+const QUOTE_CACHE_TTL_MS = 60_000;
+
 function cleanSymbol(symbol) {
   return String(symbol || "")
     .trim()
@@ -200,14 +203,27 @@ async function readJsonBody(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
-async function fetchJson(url, headers = {}) {
-  const response = await fetch(url, {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 6_000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchJson(url, headers = {}, timeoutMs = 6_000) {
+  const response = await fetchWithTimeout(url, {
     headers: {
       "User-Agent": "StockProjectionLab/2.0",
       Accept: "application/json",
       ...headers,
     },
-  });
+  }, timeoutMs);
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
@@ -216,13 +232,13 @@ async function fetchJson(url, headers = {}) {
   return response.json();
 }
 
-async function fetchText(url) {
-  const response = await fetch(url, {
+async function fetchText(url, timeoutMs = 6_000) {
+  const response = await fetchWithTimeout(url, {
     headers: {
       "User-Agent": "StockProjectionLab/2.0",
       Accept: "text/plain,text/csv,*/*",
     },
-  });
+  }, timeoutMs);
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
@@ -303,14 +319,14 @@ async function ensureDriveSession(req, res) {
 
 async function driveFetchJson(req, res, url, options = {}) {
   const session = await ensureDriveSession(req, res);
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     ...options,
     headers: {
       Authorization: `Bearer ${session.accessToken}`,
       Accept: "application/json",
       ...(options.headers || {}),
     },
-  });
+  }, 10_000);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data.error?.message || data.error_description || `Drive request failed (${response.status})`;
@@ -321,13 +337,13 @@ async function driveFetchJson(req, res, url, options = {}) {
 
 async function driveFetchText(req, res, url, options = {}) {
   const session = await ensureDriveSession(req, res);
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     ...options,
     headers: {
       Authorization: `Bearer ${session.accessToken}`,
       ...(options.headers || {}),
     },
-  });
+  }, 10_000);
   const text = await response.text();
   if (!response.ok) {
     throw new Error(text || `Drive request failed (${response.status})`);
@@ -588,7 +604,7 @@ function latestFact(facts, tags, unit, preferredForms = ["10-K", "10-Q"]) {
 async function fetchSecCompanyFacts(symbol) {
   const tickers = await fetchJson("https://www.sec.gov/files/company_tickers.json", {
     "User-Agent": "StockProjectionLab/2.0 support@example.com",
-  });
+  }, 8_000);
   const lookup = secLookupSymbol(symbol);
   const company = Object.values(tickers).find((item) => item.ticker?.toUpperCase() === lookup);
   if (!company?.cik_str) return null;
@@ -596,7 +612,7 @@ async function fetchSecCompanyFacts(symbol) {
   const cik = String(company.cik_str).padStart(10, "0");
   const facts = await fetchJson(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, {
     "User-Agent": "StockProjectionLab/2.0 support@example.com",
-  });
+  }, 8_000);
   const revenue =
     latestFact(facts.facts, ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues"], "USD", ["10-K"]) ||
     latestFact(facts.facts, ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues"], "USD");
@@ -629,7 +645,7 @@ async function fetchSecCompanyFacts(symbol) {
 }
 
 async function fetchStooqFallback(symbol) {
-  const csv = await fetchText(`https://stooq.com/q/l/?s=${encodeURIComponent(stooqSymbol(symbol))}&f=sd2t2ohlcv&h&e=csv`);
+  const csv = await fetchText(`https://stooq.com/q/l/?s=${encodeURIComponent(stooqSymbol(symbol))}&f=sd2t2ohlcv&h&e=csv`, 4_500);
   const [, row] = csv.trim().split(/\r?\n/);
   if (!row) return null;
   const [returnedSymbol, date, time, open, high, low, close, volume] = row.split(",");
@@ -848,12 +864,23 @@ async function handleStockApi(res, symbol) {
     return;
   }
 
+  const cached = quoteCache.get(clean);
+  if (cached && cached.expiresAt > Date.now()) {
+    sendJson(res, 200, { ...cached.payload, cached: true });
+    return;
+  }
+
   const errors = [];
-  for (const provider of [fetchFinnhub, fetchAlphaVantage, fetchYahooFallback, fetchYahooChartQuoteFallback, fetchStooqFallback]) {
+  for (const provider of [fetchFinnhub, fetchAlphaVantage, fetchYahooChartQuoteFallback, fetchYahooFallback, fetchStooqFallback]) {
     try {
       const data = await provider(clean);
       if (data) {
-        sendJson(res, 200, { ...data, fetchedAt: new Date().toISOString() });
+        const payload = { ...data, fetchedAt: new Date().toISOString() };
+        quoteCache.set(clean, {
+          payload,
+          expiresAt: Date.now() + QUOTE_CACHE_TTL_MS,
+        });
+        sendJson(res, 200, payload);
         return;
       }
     } catch (error) {
