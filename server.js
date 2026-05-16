@@ -35,6 +35,25 @@ function cleanSymbol(symbol) {
     .slice(0, 12);
 }
 
+function yahooSymbol(symbol) {
+  return String(symbol || "").toUpperCase().replace(/\./g, "-");
+}
+
+function stooqSymbol(symbol) {
+  const clean = String(symbol || "").toLowerCase();
+  if (clean.includes(".")) {
+    return `${clean.replace(/\./g, "_")}.us`;
+  }
+  if (clean.endsWith("usd")) {
+    return clean;
+  }
+  return `${clean}.us`;
+}
+
+function secLookupSymbol(symbol) {
+  return String(symbol || "").toUpperCase().replace(/\./g, "-");
+}
+
 function sendJson(res, status, data) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -160,7 +179,7 @@ async function fetchAlphaVantage(symbol) {
 async function fetchYahooFallback(symbol) {
   const modules = "price,summaryDetail,defaultKeyStatistics,financialData,summaryProfile";
   const data = await fetchJson(
-    `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${modules}`,
+    `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(yahooSymbol(symbol))}?modules=${modules}`,
   );
   const result = data?.quoteSummary?.result?.[0];
   if (!result?.price?.regularMarketPrice?.raw) return null;
@@ -193,6 +212,45 @@ async function fetchYahooFallback(symbol) {
   };
 }
 
+async function fetchYahooChartQuoteFallback(symbol) {
+  const data = await fetchJson(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(symbol))}?range=5d&interval=1d&includePrePost=false`,
+  );
+  const result = data?.chart?.result?.[0];
+  const meta = result?.meta || {};
+  const quote = result?.indicators?.quote?.[0] || {};
+  const timestamps = result?.timestamp || [];
+  const lastClose = [...(quote.close || [])].reverse().find((value) => Number.isFinite(Number(value)));
+  const price = Number(meta.regularMarketPrice) || Number(lastClose);
+  if (!price) return null;
+
+  return {
+    source: "Yahoo Finance chart fallback",
+    symbol,
+    price,
+    previousClose: Number(meta.previousClose) || null,
+    open: Number(meta.regularMarketOpen) || Number(quote.open?.[quote.open.length - 1]) || null,
+    high: Number(meta.regularMarketDayHigh) || Number(quote.high?.[quote.high.length - 1]) || null,
+    low: Number(meta.regularMarketDayLow) || Number(quote.low?.[quote.low.length - 1]) || null,
+    timestamp: timestamps.length ? timestamps[timestamps.length - 1] * 1000 : Date.now(),
+    name: meta.longName || meta.shortName || symbol,
+    exchange: meta.exchangeName || "",
+    industry: "",
+    sector: "",
+    marketCap: null,
+    sharesOutstanding: null,
+    eps: null,
+    revenueTtm: null,
+    peTtm: null,
+    grossMargin: null,
+    netMargin: null,
+    beta: null,
+    week52High: Number(meta.fiftyTwoWeekHigh) || null,
+    week52Low: Number(meta.fiftyTwoWeekLow) || null,
+    volume: Number(quote.volume?.[quote.volume.length - 1]) || null,
+  };
+}
+
 function latestFact(facts, tags, unit, preferredForms = ["10-K", "10-Q"]) {
   const tagList = Array.isArray(tags) ? tags : [tags];
   const candidates = [];
@@ -216,7 +274,8 @@ async function fetchSecCompanyFacts(symbol) {
   const tickers = await fetchJson("https://www.sec.gov/files/company_tickers.json", {
     "User-Agent": "StockProjectionLab/2.0 support@example.com",
   });
-  const company = Object.values(tickers).find((item) => item.ticker?.toUpperCase() === symbol.toUpperCase());
+  const lookup = secLookupSymbol(symbol);
+  const company = Object.values(tickers).find((item) => item.ticker?.toUpperCase() === lookup);
   if (!company?.cik_str) return null;
 
   const cik = String(company.cik_str).padStart(10, "0");
@@ -255,8 +314,7 @@ async function fetchSecCompanyFacts(symbol) {
 }
 
 async function fetchStooqFallback(symbol) {
-  const stooqSymbol = symbol.includes(".") ? symbol.toLowerCase() : `${symbol.toLowerCase()}.us`;
-  const csv = await fetchText(`https://stooq.com/q/l/?s=${encodeURIComponent(stooqSymbol)}&f=sd2t2ohlcv&h&e=csv`);
+  const csv = await fetchText(`https://stooq.com/q/l/?s=${encodeURIComponent(stooqSymbol(symbol))}&f=sd2t2ohlcv&h&e=csv`);
   const [, row] = csv.trim().split(/\r?\n/);
   if (!row) return null;
   const [returnedSymbol, date, time, open, high, low, close, volume] = row.split(",");
@@ -302,7 +360,7 @@ async function fetchStooqFallback(symbol) {
 async function fetchHistoricalYahoo(symbol, rangeKey) {
   const chosen = historyRangeConfig[rangeKey] || historyRangeConfig["5y"];
   const data = await fetchJson(
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${chosen.range}&interval=${chosen.interval}&includePrePost=false`,
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(symbol))}?range=${chosen.range}&interval=${chosen.interval}&includePrePost=false`,
   );
   const result = data?.chart?.result?.[0];
   if (!result?.timestamp?.length) return null;
@@ -341,7 +399,7 @@ async function handleStockApi(res, symbol) {
   }
 
   const errors = [];
-  for (const provider of [fetchFinnhub, fetchAlphaVantage, fetchYahooFallback, fetchStooqFallback]) {
+  for (const provider of [fetchFinnhub, fetchAlphaVantage, fetchYahooFallback, fetchYahooChartQuoteFallback, fetchStooqFallback]) {
     try {
       const data = await provider(clean);
       if (data) {
