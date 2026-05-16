@@ -35,8 +35,7 @@
       <nav class="tabs" aria-label="Stock tools">
         <button class="tab active" data-tab="projection">Projection</button>
         <button class="tab" data-tab="compare">Compare</button>
-        <button class="tab" data-tab="valuation">Valuation</button>
-        <button class="tab" data-tab="sp500">S&amp;P 500</button>
+        <button class="tab" data-tab="valuation">Calculators</button>
         <button class="tab" data-tab="watchlist">Watchlist</button>
         <button class="tab" data-tab="portfolio">Portfolio</button>
       </nav>
@@ -317,42 +316,41 @@
               <button class="primary-button" id="runMos" type="button">Calculate</button>
               <div class="answer-box" id="mosAnswer"></div>
             </article>
-
-          </div>
-        </section>
-
-        <section class="panel" id="sp500">
-          <div class="workspace-grid">
-            <form class="tool-panel" id="sp500Form">
+            <article class="tool-panel">
               <div class="section-heading">
-                <h2>S&amp;P 500 Growth Calculator</h2>
-                <span class="small-muted">Project recurring contributions over time.</span>
+                <div>
+                  <h2>S&amp;P 500 Growth Calculator</h2>
+                  <p class="tool-copy">Project recurring contributions over time.</p>
+                </div>
               </div>
+              <form id="sp500Form">
+                <div class="input-grid">
+                  <label>
+                    Starting amount
+                    <input id="spStart" type="number" min="0" step="100" value="20000" />
+                  </label>
+                  <label>
+                    Monthly contribution
+                    <input id="spMonthly" type="number" min="0" step="50" value="500" />
+                  </label>
+                  <label>
+                    Annual growth rate (%)
+                    <input id="spRate" type="number" min="0" step="0.1" value="10" />
+                  </label>
+                  <label>
+                    Years
+                    <input id="spYears" type="number" min="1" max="50" step="1" value="10" />
+                  </label>
+                </div>
 
-              <div class="input-grid">
-                <label>
-                  Starting amount
-                  <input id="spStart" type="number" min="0" step="100" value="20000" />
-                </label>
-                <label>
-                  Monthly contribution
-                  <input id="spMonthly" type="number" min="0" step="50" value="500" />
-                </label>
-                <label>
-                  Annual growth rate (%)
-                  <input id="spRate" type="number" min="0" step="0.1" value="10" />
-                </label>
-                <label>
-                  Years
-                  <input id="spYears" type="number" min="1" max="50" step="1" value="10" />
-                </label>
-              </div>
+                <div class="button-row">
+                  <button class="primary-button" type="submit">Run calculator</button>
+                </div>
+              </form>
+            </article>
+          </div>
 
-              <div class="button-row">
-                <button class="primary-button" type="submit">Run calculator</button>
-              </div>
-            </form>
-
+          <div class="workspace-grid">
             <aside class="results-panel">
               <div class="section-heading">
                 <h2>S&amp;P Summary</h2>
@@ -409,10 +407,11 @@
           <div class="watchlist-header">
             <div>
               <h2>Saved Projections</h2>
-              <p class="small-muted">Open a saved setup, or remove it if you no longer need to track it.</p>
+              <p class="small-muted">Open a saved setup, keep notes on each idea, or remove it if you no longer need to track it.</p>
             </div>
             <button class="secondary-button" id="clearWatchlist" type="button">Clear watchlist</button>
           </div>
+          <p class="inline-status" id="watchlistStatus"></p>
           <div class="watchlist-grid" id="watchlistGrid"></div>
         </section>
 
