@@ -39,6 +39,14 @@ const storageKeys = {
 const portfolioTemplate = {
   trades: [],
   holdings: [],
+  sync: {
+    remoteFileId: null,
+    lastSyncedAt: null,
+    remoteUpdatedAt: null,
+    syncStatus: "local_only",
+    remoteRevision: null,
+    deviceId: null,
+  },
 };
 
 const requiredTradeColumns = [
@@ -67,12 +75,17 @@ const requiredHoldingColumns = [
 const appState = {
   lastProjection: null,
   lastStockData: null,
+  projectionHistory: null,
   projectionHistoryRange: "5y",
   compareHistoryRange: "5y",
   compareView: "historical",
   watchlist: [],
   compareHistorical: null,
   portfolio: loadPortfolioState(),
+  portfolioRemoteConflict: null,
+  driveAuth: {
+    connected: false,
+  },
   charts: {},
   activeTradeEditId: null,
 };
@@ -227,6 +240,10 @@ function loadPortfolioState() {
   return {
     trades: Array.isArray(stored.trades) ? stored.trades : [],
     holdings: Array.isArray(stored.holdings) ? stored.holdings : [],
+    sync: {
+      ...structuredClone(portfolioTemplate).sync,
+      ...(stored.sync || {}),
+    },
   };
 }
 
@@ -266,6 +283,33 @@ async function fetchJson(url) {
   return data;
 }
 
+async function sendJson(url, method = "POST", body = null) {
+  const response = await fetch(url, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: body ? JSON.stringify(body) : null,
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.error || "Request failed.");
+    error.status = response.status;
+    error.payload = data;
+    throw error;
+  }
+  return data;
+}
+
+function ensurePortfolioDeviceId() {
+  if (!appState.portfolio.sync.deviceId) {
+    appState.portfolio.sync.deviceId = `device_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+    persistPortfolioState();
+  }
+  return appState.portfolio.sync.deviceId;
+}
+
 async function fetchStockData(symbol) {
   const clean = String(symbol || "").trim().toUpperCase();
   if (!clean) throw new Error("Enter a ticker first.");
@@ -276,6 +320,199 @@ async function fetchHistoricalData(symbol, range = "5y") {
   const clean = String(symbol || "").trim().toUpperCase();
   if (!clean) throw new Error("Enter a ticker first.");
   return fetchJson(`/api/stock/${encodeURIComponent(clean)}/history?range=${encodeURIComponent(range)}`);
+}
+
+function portfolioPayloadFromState() {
+  ensurePortfolioDeviceId();
+  return {
+    schemaVersion: 1,
+    updatedAt: new Date().toISOString(),
+    deviceId: appState.portfolio.sync.deviceId,
+    trades: appState.portfolio.trades.map((trade) => ({ ...trade })),
+    holdingsSnapshot: deriveHoldingsFromTrades(appState.portfolio.trades, false),
+  };
+}
+
+function applyDrivePortfolioPayload(payload, metadata = {}) {
+  const trades = Array.isArray(payload?.trades) ? payload.trades.map(normalizeImportedTrade) : [];
+  appState.portfolio.trades = trades;
+  appState.portfolio.holdings = deriveHoldingsFromTrades(trades, false);
+  appState.portfolio.sync = {
+    ...appState.portfolio.sync,
+    remoteFileId: metadata.fileId || appState.portfolio.sync.remoteFileId || null,
+    lastSyncedAt: new Date().toISOString(),
+    remoteUpdatedAt: metadata.remoteUpdatedAt || payload?.updatedAt || null,
+    syncStatus: "synced",
+    remoteRevision: metadata.remoteRevision || metadata.remoteUpdatedAt || payload?.updatedAt || null,
+    deviceId: payload?.deviceId || appState.portfolio.sync.deviceId || null,
+  };
+  appState.portfolioRemoteConflict = null;
+  persistPortfolioState();
+  renderPortfolio();
+  renderPortfolioSyncState();
+}
+
+function setPortfolioSyncStatus(message, syncStatus = null, tone = "neutral") {
+  if (syncStatus) {
+    appState.portfolio.sync.syncStatus = syncStatus;
+    persistPortfolioState();
+  }
+  setInlineStatus("portfolioStatus", message, tone);
+  renderPortfolioSyncState();
+}
+
+function renderPortfolioSyncState() {
+  const meta = el("portfolioSyncMeta");
+  if (!meta) return;
+  const sync = appState.portfolio.sync || {};
+  const auth = appState.driveAuth || {};
+  const connected = Boolean(auth.connected);
+  const lastSynced = sync.lastSyncedAt ? formatDate(sync.lastSyncedAt) : "Not yet";
+  const remoteUpdated = sync.remoteUpdatedAt ? formatDate(sync.remoteUpdatedAt) : "No remote file yet";
+  const syncLabelMap = {
+    local_only: "Saved locally only",
+    syncing: "Syncing to private Drive",
+    synced: "Synced to private Drive",
+    error: "Sync failed",
+    conflict: "Drive copy is newer",
+  };
+  meta.textContent = connected
+    ? `${syncLabelMap[sync.syncStatus] || "Drive connected"}. Last synced: ${lastSynced}. Remote updated: ${remoteUpdated}.`
+    : "Drive is not connected. Your browser cache works on this device, but it is not the permanent private copy yet.";
+
+  const connectButton = el("connectDriveButton");
+  const disconnectButton = el("disconnectDriveButton");
+  const syncButton = el("syncPortfolioNowButton");
+  const loadButton = el("loadDrivePortfolioButton");
+  if (connectButton) connectButton.disabled = connected;
+  if (disconnectButton) disconnectButton.disabled = !connected;
+  if (syncButton) syncButton.disabled = !connected;
+  if (loadButton) loadButton.disabled = !connected;
+
+  const conflictRow = el("portfolioConflictActions");
+  if (conflictRow) {
+    conflictRow.hidden = !appState.portfolioRemoteConflict;
+  }
+}
+
+async function refreshDriveAuthStatus() {
+  try {
+    const status = await fetchJson("/api/drive/auth/status");
+    appState.driveAuth = status;
+    if (status.connected && status.fileId) {
+      appState.portfolio.sync.remoteFileId = status.fileId;
+      appState.portfolio.sync.remoteUpdatedAt = status.remoteUpdatedAt || appState.portfolio.sync.remoteUpdatedAt;
+      appState.portfolio.sync.remoteRevision = status.remoteRevision || appState.portfolio.sync.remoteRevision;
+      persistPortfolioState();
+    }
+  } catch {
+    appState.driveAuth = { connected: false };
+  }
+  renderPortfolioSyncState();
+}
+
+function handleDriveAuthReturn() {
+  const url = new URL(window.location.href);
+  const driveStatus = url.searchParams.get("drive");
+  if (!driveStatus) return;
+
+  if (driveStatus === "connected") {
+    setInlineStatus("portfolioStatus", "Drive connected. You can now sync a permanent private portfolio copy.", "positive");
+  } else if (driveStatus === "error") {
+    setInlineStatus("portfolioStatus", "Drive connection did not finish. Try connecting again.", "negative");
+  }
+
+  url.searchParams.delete("drive");
+  history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function connectDrive() {
+  window.location.href = "/api/drive/auth/start";
+}
+
+async function disconnectDrive() {
+  await sendJson("/api/drive/auth/logout", "POST");
+  appState.driveAuth = { connected: false };
+  appState.portfolio.sync.syncStatus = "local_only";
+  appState.portfolio.sync.remoteFileId = null;
+  appState.portfolio.sync.remoteUpdatedAt = null;
+  appState.portfolio.sync.remoteRevision = null;
+  appState.portfolioRemoteConflict = null;
+  persistPortfolioState();
+  renderPortfolioSyncState();
+  setInlineStatus("portfolioStatus", "Disconnected from Drive. Local cache is still available on this browser.", "positive");
+}
+
+async function loadPortfolioFromDrive() {
+  setPortfolioSyncStatus("Loading your private Drive portfolio...", "syncing", "neutral");
+  const remote = await fetchJson("/api/drive/portfolio");
+  applyDrivePortfolioPayload(remote.portfolio, {
+    fileId: remote.fileId,
+    remoteUpdatedAt: remote.remoteUpdatedAt,
+    remoteRevision: remote.remoteRevision,
+  });
+  setInlineStatus("portfolioStatus", "Loaded portfolio from private Drive.", "positive");
+}
+
+async function syncPortfolioToDrive({ force = false } = {}) {
+  if (!appState.driveAuth.connected) {
+    setInlineStatus("portfolioStatus", "Connect Drive first to save a permanent private copy.", "negative");
+    return;
+  }
+
+  const payload = portfolioPayloadFromState();
+  appState.portfolio.sync.syncStatus = "syncing";
+  persistPortfolioState();
+  renderPortfolioSyncState();
+  setInlineStatus("portfolioStatus", "Syncing portfolio to private Drive...", "neutral");
+
+  try {
+    const response = await sendJson("/api/drive/portfolio", "POST", {
+      portfolio: payload,
+      remoteUpdatedAt: appState.portfolio.sync.remoteUpdatedAt,
+      force,
+    });
+    appState.portfolio.sync.remoteFileId = response.fileId || null;
+    appState.portfolio.sync.lastSyncedAt = new Date().toISOString();
+    appState.portfolio.sync.remoteUpdatedAt = response.remoteUpdatedAt || payload.updatedAt;
+    appState.portfolio.sync.remoteRevision = response.remoteRevision || response.remoteUpdatedAt || payload.updatedAt;
+    appState.portfolio.sync.syncStatus = "synced";
+    appState.portfolioRemoteConflict = null;
+    persistPortfolioState();
+    renderPortfolioSyncState();
+    setInlineStatus("portfolioStatus", "Portfolio synced to private Drive.", "positive");
+  } catch (error) {
+    if (error.status === 409) {
+      appState.portfolioRemoteConflict = error.payload || null;
+      appState.portfolio.sync.syncStatus = "conflict";
+      if (error.payload?.remoteUpdatedAt) {
+        appState.portfolio.sync.remoteUpdatedAt = error.payload.remoteUpdatedAt;
+        appState.portfolio.sync.remoteRevision = error.payload.remoteRevision || error.payload.remoteUpdatedAt;
+      }
+      persistPortfolioState();
+      renderPortfolioSyncState();
+      setInlineStatus("portfolioStatus", "Your Drive copy is newer. Load it or overwrite it.", "negative");
+      return;
+    }
+
+    appState.portfolio.sync.syncStatus = "error";
+    persistPortfolioState();
+    renderPortfolioSyncState();
+    setInlineStatus("portfolioStatus", error.message || "Portfolio sync failed.", "negative");
+  }
+}
+
+function queuePortfolioDriveSync() {
+  persistPortfolioState();
+  renderPortfolioSyncState();
+  if (!appState.driveAuth.connected) {
+    return;
+  }
+
+  clearTimeout(queuePortfolioDriveSync._timer);
+  queuePortfolioDriveSync._timer = setTimeout(() => {
+    syncPortfolioToDrive().catch(() => {});
+  }, 900);
 }
 
 function readProjectionInputs() {
@@ -293,7 +530,6 @@ function readProjectionInputs() {
           growth: numberValue(`${scenario.key}Growth`) / 100,
           margin: numberValue(`${scenario.key}Margin`) / 100,
           pe: numberValue(`${scenario.key}Pe`),
-          dilution: numberValue(`${scenario.key}Dilution`) / 100,
         },
       ]),
     ),
@@ -306,7 +542,7 @@ function calculateProjection(input) {
     const yearly = [];
     for (let year = 0; year <= input.years; year += 1) {
       const revenue = input.revenue * Math.pow(1 + assumptions.growth, year);
-      const shares = input.shares * Math.pow(1 + assumptions.dilution, year);
+      const shares = input.shares;
       const netIncome = revenue * assumptions.margin;
       const eps = shares > 0 ? netIncome / shares : 0;
       const price = eps * assumptions.pe;
@@ -368,7 +604,16 @@ function renderProjection(result) {
     )
     .join("");
 
-  drawProjectionForwardChart(result);
+  const projectionHistoryMatches =
+    appState.projectionHistory &&
+    appState.projectionHistory.symbol &&
+    String(appState.projectionHistory.symbol).toUpperCase() === result.input.ticker;
+
+  if (projectionHistoryMatches) {
+    drawProjectionUnifiedChart(result, appState.projectionHistory);
+  } else {
+    drawProjectionForwardChart(result);
+  }
 }
 
 function renderStockDataCard(data) {
@@ -706,78 +951,135 @@ function resetChartView(chartKey) {
   bundle.chart.update("none");
 }
 
-function drawProjectionForwardChart(result) {
-  createLineChart("projectionForward", "projectionForwardChart", {
-    readoutId: "projectionForwardReadout",
-    xFormatter: (value) => `Year ${value}`,
-    datasets: result.cases.map((item) => ({
-      label: item.label,
-      borderColor: item.color,
-      backgroundColor: `${item.color}33`,
-      data: item.yearly.map((point) => ({ x: point.year, y: point.price, ...point })),
-      borderWidth: 2.4,
-    })),
-  });
+function xFormatterFactory(xTime) {
+  return xTime
+    ? (value) => formatDate(value)
+    : (value) => `Year ${value}`;
+}
 
-  const baseTerminal = result.cases.find((item) => item.key === "base")?.terminal;
-  if (baseTerminal) {
-    setChartReadout(
-      "projectionForwardReadout",
-      `Base case year ${baseTerminal.year}: ${formatDollarValue(baseTerminal.price)} target | ${formatPercent(
-        result.cases.find((item) => item.key === "base").cagr,
-      )} annualized`,
-    );
-  }
+function drawProjectionForwardChart(result) {
+  const datasets = result.cases.map((scenario) => ({
+    label: `${scenario.label} case`,
+    data: scenario.yearly.map((point) => ({ x: point.year, y: point.price })),
+    borderColor: scenario.color,
+    backgroundColor: scenario.color,
+    borderWidth: 2,
+    pointRadius: 0,
+    pointHitRadius: 18,
+  }));
+
+  createLineChart("projectionForward", "projectionForwardChart", {
+    datasets,
+    readoutId: "projectionForwardReadout",
+    xFormatter: xFormatterFactory(false),
+    xTime: false,
+  });
+  setChartReadout("projectionForwardReadout", "Click a year or drag across the path to inspect the scenarios.");
+}
+
+function normalizeHistoryPoints(points) {
+  return (points || []).map((point) => ({
+    x: point.date,
+    y: point.close,
+    open: point.open,
+    high: point.high,
+    low: point.low,
+    close: point.close,
+    volume: point.volume,
+  }));
+}
+
+function historyReadout(symbol, history) {
+  return `${symbol} ${history.rangeLabel || history.range.toUpperCase()} history loaded. Click or drag to inspect exact points.`;
+}
+
+function drawProjectionHistoricalChart(history) {
+  const symbol = history.symbol || el("ticker").value.trim().toUpperCase();
+  appState.projectionHistory = history;
+
+  createLineChart("projectionHistorical", "projectionForwardChart", {
+    datasets: [
+      {
+        label: `${symbol} price`,
+        data: normalizeHistoryPoints(history.points),
+        borderColor: "#4f8cff",
+        backgroundColor: "#4f8cff",
+        borderWidth: 2,
+      },
+    ],
+    readoutId: "projectionForwardReadout",
+    xFormatter: xFormatterFactory(true),
+    xTime: true,
+  });
+  setChartReadout("projectionForwardReadout", historyReadout(symbol, history));
+}
+
+function drawProjectionUnifiedChart(result, history) {
+  const historyPoints = normalizeHistoryPoints(history.points);
+  const lastHistoricalPoint = historyPoints[historyPoints.length - 1] || null;
+  const baseTime = lastHistoricalPoint?.x || Date.now();
+  const stepMs = 365 * 24 * 60 * 60 * 1000;
+
+  const datasets = [
+    {
+      label: `${result.input.ticker} historical`,
+      data: historyPoints,
+      borderColor: "#4f8cff",
+      backgroundColor: "#4f8cff",
+      borderWidth: 2.4,
+      pointRadius: 0,
+      pointHitRadius: 18,
+    },
+    ...result.cases.map((scenario) => ({
+      label: `${scenario.label} case`,
+      data: scenario.yearly.map((point, index) => ({
+        x: baseTime + index * stepMs,
+        y: point.price,
+        year: point.year,
+      })),
+      borderColor: scenario.color,
+      backgroundColor: scenario.color,
+      borderWidth: 2,
+      borderDash: scenario.key === "base" ? [] : [7, 6],
+      pointRadius: 0,
+      pointHitRadius: 18,
+    })),
+  ];
+
+  createLineChart("projectionForward", "projectionForwardChart", {
+    datasets,
+    readoutId: "projectionForwardReadout",
+    xFormatter: xFormatterFactory(true),
+    xTime: true,
+  });
+  setChartReadout(
+    "projectionForwardReadout",
+    `${result.input.ticker} price path loaded. Historical pricing rolls straight into your bull, base, and bear scenarios.`,
+  );
 }
 
 async function loadProjectionHistoricalChart(symbol, range) {
-  const historical = await fetchHistoricalData(symbol, range);
-  const series = (historical.prices || []).map((point) => ({
-    x: point.date,
-    y: Number(point.close),
-  }));
-
-  if (!series.length) {
-    throw new Error("No historical data available.");
+  const history = await fetchHistoricalData(symbol, range);
+  appState.projectionHistory = history;
+  if (appState.lastProjection && appState.lastProjection.input.ticker === String(symbol || "").trim().toUpperCase()) {
+    drawProjectionUnifiedChart(appState.lastProjection, history);
+  } else {
+    drawProjectionHistoricalChart(history);
   }
-
-  createLineChart("projectionHistorical", "projectionHistoricalChart", {
-    readoutId: "projectionHistoricalReadout",
-    xTime: true,
-    xFormatter: (value) => formatDate(value),
-    datasets: [
-      {
-        label: symbol.toUpperCase(),
-        borderColor: "#4f8cff",
-        backgroundColor: "rgba(79, 140, 255, 0.22)",
-        data: series,
-        borderWidth: 2.4,
-      },
-    ],
-  });
-
-  const first = series[0];
-  const last = series[series.length - 1];
-  const change = first?.y ? (last.y - first.y) / first.y : 0;
-  setChartReadout(
-    "projectionHistoricalReadout",
-    `${symbol.toUpperCase()} ${range.toUpperCase()} history loaded. Click or drag to inspect exact points.`,
-  );
-  return change;
 }
 
 function readCompareInputs() {
   return {
     years: Math.max(1, Math.min(15, Number(el("compareYears").value) || 5)),
-    a: {
-      ticker: el("compareATicker").value.trim().toUpperCase() || "AAPL",
+    A: {
+      ticker: el("compareATicker").value.trim().toUpperCase() || "A",
       price: Number(el("compareAPrice").value) || 0,
       eps: Number(el("compareAEps").value) || 0,
       growth: (Number(el("compareAGrowth").value) || 0) / 100,
       pe: Number(el("compareAPe").value) || 0,
     },
-    b: {
-      ticker: el("compareBTicker").value.trim().toUpperCase() || "MSFT",
+    B: {
+      ticker: el("compareBTicker").value.trim().toUpperCase() || "B",
       price: Number(el("compareBPrice").value) || 0,
       eps: Number(el("compareBEps").value) || 0,
       growth: (Number(el("compareBGrowth").value) || 0) / 100,
@@ -786,228 +1088,276 @@ function readCompareInputs() {
   };
 }
 
-function calcCompareProjection(stock, years) {
-  const points = [];
-  for (let year = 0; year <= years; year += 1) {
+function compareProjectionLine(stock, years) {
+  return Array.from({ length: years + 1 }, (_, year) => {
     const eps = stock.eps * Math.pow(1 + stock.growth, year);
     const price = eps * stock.pe;
-    const multiple = stock.price > 0 ? price / stock.price : 0;
-    points.push({ x: year, y: price, eps, price, multiple });
-  }
-  const terminal = points[points.length - 1];
-  const cagr = stock.price > 0 && terminal.price > 0 ? Math.pow(terminal.price / stock.price, 1 / years) - 1 : 0;
-  return { stock, points, terminal, cagr };
+    return { x: year, y: price, price, eps };
+  });
 }
 
 function runCompare() {
-  const inputs = readCompareInputs();
-  const a = calcCompareProjection(inputs.a, inputs.years);
-  const b = calcCompareProjection(inputs.b, inputs.years);
+  const input = readCompareInputs();
+  const lineA = compareProjectionLine(input.A, input.years);
+  const lineB = compareProjectionLine(input.B, input.years);
+  const terminalA = lineA[lineA.length - 1];
+  const terminalB = lineB[lineB.length - 1];
+  const cagrA = input.A.price > 0 ? Math.pow(terminalA.price / input.A.price, 1 / input.years) - 1 : 0;
+  const cagrB = input.B.price > 0 ? Math.pow(terminalB.price / input.B.price, 1 / input.years) - 1 : 0;
 
-  el("compareCards").innerHTML = [a, b]
+  el("compareCards").innerHTML = [
+    {
+      label: input.A.ticker,
+      terminal: terminalA.price,
+      cagr: cagrA,
+      multiple: input.A.price > 0 ? terminalA.price / input.A.price : 0,
+    },
+    {
+      label: input.B.ticker,
+      terminal: terminalB.price,
+      cagr: cagrB,
+      multiple: input.B.price > 0 ? terminalB.price / input.B.price : 0,
+    },
+  ]
     .map(
       (item) => `
         <article class="metric-card">
-          <span>${item.stock.ticker}</span>
-          <strong>${formatDollarValue(item.terminal.price)}</strong>
-          <p>${formatPercent(item.cagr)} annualized | ${item.terminal.multiple.toFixed(2)}x expected value</p>
+          <span>${item.label}</span>
+          <strong>${formatDollarValue(item.terminal)}</strong>
+          <p>${formatPercent(item.cagr)} annualized | ${item.multiple.toFixed(2)}x outcome</p>
         </article>
       `,
     )
     .join("");
 
-  drawCompareForwardChart(a, b);
-  return { a, b, inputs };
-}
-
-function drawCompareForwardChart(a, b) {
   createLineChart("compareForward", "compareForwardChart", {
-    readoutId: "compareForwardReadout",
-    xFormatter: (value) => `Year ${value}`,
     datasets: [
       {
-        label: a.stock.ticker,
+        label: input.A.ticker,
+        data: lineA,
         borderColor: "#4f8cff",
-        backgroundColor: "rgba(79, 140, 255, 0.2)",
-        data: a.points,
-        borderWidth: 2.4,
+        backgroundColor: "#4f8cff",
+        borderWidth: 2,
       },
       {
-        label: b.stock.ticker,
-        borderColor: "#f4b74e",
-        backgroundColor: "rgba(244, 183, 78, 0.18)",
-        data: b.points,
-        borderWidth: 2.4,
+        label: input.B.ticker,
+        data: lineB,
+        borderColor: "#3ecf8e",
+        backgroundColor: "#3ecf8e",
+        borderWidth: 2,
       },
     ],
+    readoutId: "compareForwardReadout",
+    xFormatter: xFormatterFactory(false),
+    xTime: false,
   });
-
-  setChartReadout(
-    "compareForwardReadout",
-    `${a.stock.ticker} vs ${b.stock.ticker}: inspect the projected paths to compare ending values and compounding.`,
-  );
+  setChartReadout("compareForwardReadout", "Forward comparison details will appear here.");
 }
 
-function normalizeHistoricalSeries(rawPrices) {
-  if (!Array.isArray(rawPrices) || !rawPrices.length) return [];
-  const base = Number(rawPrices[0].close) || 0;
-  return rawPrices.map((point) => ({
-    x: point.date,
-    y: base > 0 ? (Number(point.close) / base) * 100 : 0,
-    close: Number(point.close),
-  }));
+function normalizeCompareHistory(points) {
+  if (!points.length) return [];
+  const base = points[0].close || points[0].y || 1;
+  return points.map((point) => ({ x: point.date || point.x, y: ((point.close || point.y) / base) * 100 }));
 }
 
-async function loadCompareHistoricalChart(range = "5y") {
-  const { a, b } = readCompareInputs();
-  const [aData, bData] = await Promise.all([fetchHistoricalData(a.ticker, range), fetchHistoricalData(b.ticker, range)]);
-  appState.compareHistorical = { a: aData, b: bData };
-
-  const seriesA = normalizeHistoricalSeries(aData.prices || []);
-  const seriesB = normalizeHistoricalSeries(bData.prices || []);
-
-  if (!seriesA.length || !seriesB.length) {
-    throw new Error("Historical comparison data is unavailable.");
-  }
+async function loadCompareHistoricalChart(range) {
+  const tickerA = el("compareATicker").value.trim().toUpperCase();
+  const tickerB = el("compareBTicker").value.trim().toUpperCase();
+  const [historyA, historyB] = await Promise.all([fetchHistoricalData(tickerA, range), fetchHistoricalData(tickerB, range)]);
+  appState.compareHistorical = { historyA, historyB };
 
   createLineChart("compareHistorical", "compareHistoricalChart", {
-    readoutId: "compareHistoricalReadout",
-    xTime: true,
-    xFormatter: (value) => formatDate(value),
-    yAxisLabelPrefix: "",
     datasets: [
       {
-        label: a.ticker,
+        label: `${tickerA} normalized`,
+        data: normalizeCompareHistory(historyA.points),
         borderColor: "#4f8cff",
-        backgroundColor: "rgba(79, 140, 255, 0.22)",
-        data: seriesA,
-        borderWidth: 2.4,
+        backgroundColor: "#4f8cff",
+        borderWidth: 2,
       },
       {
-        label: b.ticker,
-        borderColor: "#f4b74e",
-        backgroundColor: "rgba(244, 183, 78, 0.18)",
-        data: seriesB,
-        borderWidth: 2.4,
+        label: `${tickerB} normalized`,
+        data: normalizeCompareHistory(historyB.points),
+        borderColor: "#3ecf8e",
+        backgroundColor: "#3ecf8e",
+        borderWidth: 2,
       },
     ],
+    readoutId: "compareHistoricalReadout",
+    xFormatter: xFormatterFactory(true),
+    xTime: true,
   });
-
-  setChartReadout(
-    "compareHistoricalReadout",
-    `${a.ticker} and ${b.ticker} normalized over ${range.toUpperCase()}. Click or drag to compare any period.`,
-  );
-}
-
-async function fetchCompareTickers() {
-  const button = el("fetchCompare");
-  button.disabled = true;
-  button.textContent = "Fetching...";
-  try {
-    const [a, b] = await Promise.all([fetchStockData(el("compareATicker").value), fetchStockData(el("compareBTicker").value)]);
-    el("compareATicker").value = a.symbol;
-    el("compareAPrice").value = Number(a.price || 0).toFixed(2);
-    el("compareAEps").value = Number(a.eps || 0).toFixed(2);
-    el("compareAGrowth").value = a.epsGrowth5y ?? 9;
-    el("compareAPe").value = Number(a.peTtm || 22).toFixed(1);
-
-    el("compareBTicker").value = b.symbol;
-    el("compareBPrice").value = Number(b.price || 0).toFixed(2);
-    el("compareBEps").value = Number(b.eps || 0).toFixed(2);
-    el("compareBGrowth").value = b.epsGrowth5y ?? 12;
-    el("compareBPe").value = Number(b.peTtm || 24).toFixed(1);
-
-    runCompare();
-    await loadCompareHistoricalChart(appState.compareHistoryRange);
-  } finally {
-    button.disabled = false;
-    button.textContent = "Fetch A & B";
-  }
+  setChartReadout("compareHistoricalReadout", `${tickerA} and ${tickerB} ${historyA.rangeLabel || range.toUpperCase()} history loaded.`);
 }
 
 function runReverse() {
   const price = Number(el("revPrice").value) || 0;
   const eps = Number(el("revEps").value) || 0;
-  const pe = Number(el("revPe").value) || 0;
-  const years = Math.max(1, Number(el("revYears").value) || 5);
+  const exitPe = Number(el("revPe").value) || 0;
+  const years = Math.max(1, Number(el("revYears").value) || 1);
+  if (price <= 0 || eps <= 0 || exitPe <= 0) {
+    el("reverseAnswer").textContent = "Enter positive values to calculate the implied growth rate.";
+    return;
+  }
 
-  const targetEps = pe > 0 ? price / pe : 0;
-  const impliedGrowth = eps > 0 && targetEps > 0 ? Math.pow(targetEps / eps, 1 / years) - 1 : 0;
-
+  const targetEps = price / exitPe;
+  const impliedGrowth = Math.pow(targetEps / eps, 1 / years) - 1;
   el("reverseAnswer").innerHTML = `
-    <strong>Implied EPS growth:</strong> ${formatPercent(impliedGrowth)} annually<br />
-    <span class="small-muted">That is the growth rate needed for EPS to justify today&apos;s price at a ${oneDecimal.format(pe)}x exit multiple in ${years} years.</span>
+    <strong>${formatPercent(impliedGrowth)}</strong>
+    <p>The current price implies EPS must grow from ${formatDollarValue(eps)} to ${formatDollarValue(targetEps)} over ${years} years if the stock exits at ${oneDecimal.format(exitPe)}x earnings.</p>
   `;
 }
 
 function runMos() {
   const fairValue = Number(el("fairValue").value) || 0;
   const currentPrice = Number(el("mosPrice").value) || 0;
-  const required = (Number(el("mosPercent").value) || 0) / 100;
-  const targetBuy = fairValue * (1 - required);
-  const currentDiscount = fairValue > 0 ? 1 - currentPrice / fairValue : 0;
+  const requiredSafety = (Number(el("mosPercent").value) || 0) / 100;
+  if (fairValue <= 0 || currentPrice <= 0) {
+    el("mosAnswer").textContent = "Enter positive fair value and current price values.";
+    return;
+  }
 
+  const discount = 1 - currentPrice / fairValue;
+  const buyBelow = fairValue * (1 - requiredSafety);
   el("mosAnswer").innerHTML = `
-    <strong>Target buy price:</strong> ${formatDollarValue(targetBuy)}<br />
-    <strong>Current discount to fair value:</strong> ${formatPercent(currentDiscount)}<br />
-    <span class="small-muted">This compares your desired margin of safety to the current market price.</span>
+    <strong>${formatPercent(discount)}</strong>
+    <p>The stock trades ${discount >= 0 ? "below" : "above"} your fair value estimate. A ${formatPercent(requiredSafety)} margin of safety would put your preferred entry near ${formatDollarValue(buyBelow)}.</p>
   `;
 }
 
-function computeSp500Series() {
-  const start = Number(el("spStart").value) || 0;
-  const monthly = Number(el("spMonthly").value) || 0;
-  const annualRate = (Number(el("spRate").value) || 0) / 100;
-  const years = Math.max(1, Number(el("spYears").value) || 10);
-  const monthlyRate = annualRate / 12;
+function saveProjection() {
+  const projection = appState.lastProjection || calculateProjection(readProjectionInputs());
+  const base = projection.cases.find((item) => item.key === "base");
+  const entry = {
+    ticker: projection.input.ticker,
+    savedAt: new Date().toISOString(),
+    currentPrice: projection.input.currentPrice,
+    baseCagr: base?.cagr || 0,
+    outcomes: Object.fromEntries(projection.cases.map((item) => [item.key, item.terminal.price])),
+    inputs: readProjectionInputs(),
+  };
 
-  let current = start;
-  const rows = [{ year: 0, startValue: start, contributions: 0, growth: 0, endValue: start }];
+  appState.watchlist = [entry, ...appState.watchlist.filter((item) => item.ticker !== entry.ticker)].slice(0, 24);
+  persistWatchlist();
+  renderWatchlist();
+  setInlineStatus("projectionSaveStatus", `${entry.ticker} saved to watchlist.`, "positive");
+}
 
-  for (let year = 1; year <= years; year += 1) {
-    const yearStart = current;
-    let contributions = 0;
-    for (let month = 0; month < 12; month += 1) {
-      current += monthly;
-      contributions += monthly;
-      current *= 1 + monthlyRate;
-    }
-    const yearEnd = current;
-    rows.push({
-      year,
-      startValue: yearStart,
-      contributions,
-      growth: yearEnd - yearStart - contributions,
-      endValue: yearEnd,
-    });
+function restoreProjectionInputs(input) {
+  if (!input) return;
+  el("ticker").value = input.ticker;
+  el("currentPrice").value = input.currentPrice;
+  el("revenue").value = input.revenue;
+  el("shares").value = input.shares;
+  el("eps").value = input.eps;
+  el("years").value = input.years;
+  scenarioConfig.forEach((scenario) => {
+    el(`${scenario.key}Growth`).value = (input.cases[scenario.key].growth * 100).toFixed(1);
+    el(`${scenario.key}Margin`).value = (input.cases[scenario.key].margin * 100).toFixed(1);
+    el(`${scenario.key}Pe`).value = input.cases[scenario.key].pe;
+  });
+}
+
+function renderWatchlist() {
+  const grid = el("watchlistGrid");
+  if (!appState.watchlist.length) {
+    grid.innerHTML = `
+      <article class="empty-card">
+        <strong>No saved projections yet.</strong>
+        <p>Save one from the Projection tab and it will show up here immediately.</p>
+      </article>
+    `;
+    return;
   }
 
-  return rows;
+  grid.innerHTML = appState.watchlist
+    .map(
+      (item, index) => `
+        <article class="watch-card">
+          <div class="watch-card-top">
+            <div>
+              <strong>${item.ticker}</strong>
+              <p>Saved ${formatDate(item.savedAt)}</p>
+            </div>
+            <span>${formatDollarValue(item.currentPrice)}</span>
+          </div>
+          <div class="watch-metrics">
+            <span>Bear ${formatDollarValue(item.outcomes.bear)}</span>
+            <span>Base ${formatDollarValue(item.outcomes.base)}</span>
+            <span>Bull ${formatDollarValue(item.outcomes.bull)}</span>
+            <span>Base CAGR ${formatPercent(item.baseCagr)}</span>
+          </div>
+          <div class="button-row">
+            <button class="secondary-button" data-watch-action="load" data-watch-index="${index}" type="button">Load</button>
+            <button class="secondary-button" data-watch-action="delete" data-watch-index="${index}" type="button">Delete</button>
+          </div>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function calculateSp500Series() {
+  const startingAmount = Number(el("spStart").value) || 0;
+  const monthlyContribution = Number(el("spMonthly").value) || 0;
+  const annualRate = (Number(el("spRate").value) || 0) / 100;
+  const years = Math.max(1, Number(el("spYears").value) || 1);
+  const monthlyRate = annualRate / 12;
+
+  let balance = startingAmount;
+  const rows = [];
+  const chartPoints = [{ x: 0, y: balance }];
+
+  for (let year = 1; year <= years; year += 1) {
+    const startValue = balance;
+    let contributions = 0;
+    for (let month = 0; month < 12; month += 1) {
+      balance += monthlyContribution;
+      contributions += monthlyContribution;
+      balance *= 1 + monthlyRate;
+    }
+    const endingValue = balance;
+    rows.push({
+      year,
+      startValue,
+      contributions,
+      growth: endingValue - startValue - contributions,
+      endingValue,
+    });
+    chartPoints.push({ x: year, y: endingValue });
+  }
+
+  return {
+    startingAmount,
+    monthlyContribution,
+    annualRate,
+    years,
+    rows,
+    chartPoints,
+    endingValue: balance,
+    totalContributions: startingAmount + monthlyContribution * years * 12,
+    totalGrowth: balance - (startingAmount + monthlyContribution * years * 12),
+  };
 }
 
 function renderSp500() {
-  const rows = computeSp500Series();
-  const ending = rows[rows.length - 1].endValue;
-  const totalContrib = rows.reduce((sum, row) => sum + row.contributions, 0) + rows[0].startValue;
-  const totalGrowth = ending - totalContrib;
-
+  const result = calculateSp500Series();
   el("sp500Cards").innerHTML = [
-    ["Ending value", formatDollarValue(ending), `${rows.length - 1} years`],
-    ["Total contributed", formatDollarValue(totalContrib), "Start + monthly adds"],
-    ["Total growth", formatDollarValue(totalGrowth), "Compounding gains", classForValue(totalGrowth)],
+    ["Ending value", formatDollarValue(result.endingValue)],
+    ["Total contributed", formatDollarValue(result.totalContributions)],
+    ["Total growth", formatDollarValue(result.totalGrowth)],
   ]
     .map(
-      ([label, value, sub, tone]) => `
-        <article class="metric-card ${tone || ""}">
+      ([label, value]) => `
+        <article class="metric-card">
           <span>${label}</span>
           <strong>${value}</strong>
-          <p>${sub}</p>
         </article>
       `,
     )
     .join("");
 
-  el("sp500Table").innerHTML = rows
+  el("sp500Table").innerHTML = result.rows
     .map(
       (row) => `
         <tr>
@@ -1015,279 +1365,200 @@ function renderSp500() {
           <td>${formatDollarValue(row.startValue)}</td>
           <td>${formatDollarValue(row.contributions)}</td>
           <td>${formatDollarValue(row.growth)}</td>
-          <td>${formatDollarValue(row.endValue)}</td>
+          <td>${formatDollarValue(row.endingValue)}</td>
         </tr>
       `,
     )
     .join("");
 
   createLineChart("sp500Chart", "sp500ChartCanvas", {
-    readoutId: "sp500Readout",
-    xFormatter: (value) => `Year ${value}`,
     datasets: [
       {
         label: "Portfolio value",
-        borderColor: "#3ecf8e",
-        backgroundColor: "rgba(62, 207, 142, 0.18)",
-        data: rows.map((row) => ({ x: row.year, y: row.endValue, ...row })),
-        borderWidth: 2.4,
+        data: result.chartPoints,
+        borderColor: "#4f8cff",
+        backgroundColor: "#4f8cff",
+        borderWidth: 2,
       },
     ],
+    readoutId: "sp500Readout",
+    xFormatter: xFormatterFactory(false),
+    xTime: false,
   });
-
-  setChartReadout("sp500Readout", `Ending value after ${rows.length - 1} years: ${formatDollarValue(ending)}.`);
+  setChartReadout("sp500Readout", "S&P chart details will appear here.");
 }
 
-function restoreProjectionInputs(inputs) {
-  if (!inputs) return;
-  el("ticker").value = inputs.ticker;
-  el("currentPrice").value = inputs.currentPrice;
-  el("revenue").value = inputs.revenue;
-  el("shares").value = inputs.shares;
-  el("eps").value = inputs.eps;
-  el("years").value = inputs.years;
-  scenarioConfig.forEach((scenario) => {
-    const assumptions = inputs.cases[scenario.key];
-    el(`${scenario.key}Growth`).value = assumptions.growth * 100;
-    el(`${scenario.key}Margin`).value = assumptions.margin * 100;
-    el(`${scenario.key}Pe`).value = assumptions.pe;
-    el(`${scenario.key}Dilution`).value = assumptions.dilution * 100;
-  });
+function portfolioTotals(holdings) {
+  return holdings.reduce(
+    (totals, holding) => {
+      totals.initialValue += holding.initialValue || 0;
+      totals.currentValue += holding.currentValue || 0;
+      totals.dayChange += holding.dayChange || 0;
+      totals.unrealizedProfit += holding.unrealizedProfit || 0;
+      totals.realizedProfit += holding.realizedProfit || 0;
+      return totals;
+    },
+    { initialValue: 0, currentValue: 0, dayChange: 0, unrealizedProfit: 0, realizedProfit: 0 },
+  );
 }
 
-function saveProjection() {
-  const result = appState.lastProjection || runProjection();
-  const payload = {
-    ticker: result.input.ticker,
-    savedAt: new Date().toISOString(),
-    inputs: result.input,
-    bear: result.cases.find((item) => item.key === "bear")?.terminal?.price || 0,
-    base: result.cases.find((item) => item.key === "base")?.terminal?.price || 0,
-    bull: result.cases.find((item) => item.key === "bull")?.terminal?.price || 0,
-    baseCagr: result.cases.find((item) => item.key === "base")?.cagr || 0,
-    currentPrice: result.input.currentPrice,
-  };
-
-  const existingIndex = appState.watchlist.findIndex((item) => item.ticker === result.input.ticker);
-  if (existingIndex >= 0) {
-    appState.watchlist.splice(existingIndex, 1, payload);
-  } else {
-    appState.watchlist.unshift(payload);
-  }
-  appState.watchlist = appState.watchlist.slice(0, 40);
-  persistWatchlist();
-  renderWatchlist();
-  setInlineStatus("projectionSaveStatus", `${payload.ticker} saved to watchlist.`, "positive");
-}
-
-function renderWatchlist() {
-  const container = el("watchlistGrid");
-  if (!appState.watchlist.length) {
-    container.innerHTML = `<article class="empty-card">Save a projection to start building your watchlist.</article>`;
-    return;
-  }
-
-  container.innerHTML = appState.watchlist
-    .map(
-      (item, index) => `
-        <article class="watch-card">
-          <div class="watch-card-top">
-            <div>
-              <strong>${item.ticker}</strong>
-              <p class="small-muted">Saved ${formatDate(item.savedAt)}</p>
-            </div>
-            <span class="watch-price">${formatDollarValue(item.currentPrice)}</span>
-          </div>
-          <div class="watch-grid">
-            <div><span>Bear</span><b>${formatDollarValue(item.bear)}</b></div>
-            <div><span>Base</span><b>${formatDollarValue(item.base)}</b></div>
-            <div><span>Bull</span><b>${formatDollarValue(item.bull)}</b></div>
-            <div><span>Base CAGR</span><b>${formatPercent(item.baseCagr)}</b></div>
-          </div>
-          <div class="button-row compact-row">
-            <button class="primary-button" type="button" data-watch-action="load" data-watch-index="${index}">Load</button>
-            <button class="secondary-button" type="button" data-watch-action="delete" data-watch-index="${index}">Delete</button>
-          </div>
-        </article>
-      `,
-    )
-    .join("");
-}
-
-function getPortfolioWorkbookData() {
-  const holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
-  return {
-    trades: appState.portfolio.trades.map(formatTradeForWorkbook),
-    holdings: holdings.map(formatHoldingForWorkbook),
-  };
-}
-
-function formatTradeForWorkbook(trade) {
-  return {
-    Date: trade.date,
-    Symbol: trade.symbol,
-    Asset: trade.asset,
-    Sector: trade.sector,
-    Side: trade.side,
-    Quantity: trade.quantity,
-    "Trade Price": trade.tradePrice,
-    Fees: trade.fees,
-    Account: trade.account,
-    Notes: trade.notes,
-  };
-}
-
-function formatHoldingForWorkbook(holding) {
-  return {
-    Symbol: holding.symbol,
-    Asset: holding.asset,
-    Sector: holding.sector,
-    Quantity: holding.quantity,
-    "Average Cost": holding.averageCost,
-    "Initial Value": holding.initialValue,
-    Account: holding.account,
-  };
-}
-
-function deriveHoldingsFromTrades(trades, includeQuoteFields = true) {
-  const grouped = new Map();
+function deriveHoldingsFromTrades(trades, preserveQuotes = true) {
+  const priorMap = new Map((appState.portfolio.holdings || []).map((holding) => [holding.symbol, holding]));
+  const ledger = new Map();
 
   [...trades]
     .sort((a, b) => new Date(a.date) - new Date(b.date))
     .forEach((trade) => {
-      const key = `${trade.account}__${trade.symbol}`;
-      const entry =
-        grouped.get(key) || {
+      const key = trade.symbol;
+      if (!key) return;
+      const bucket =
+        ledger.get(key) || {
           symbol: trade.symbol,
           asset: trade.asset,
-          sector: trade.sector,
-          account: trade.account,
+          sector: trade.sector || "Unassigned",
+          account: trade.account || "Primary",
           quantity: 0,
+          costBasis: 0,
           averageCost: 0,
           initialValue: 0,
           realizedProfit: 0,
-          latestQuote: null,
         };
 
-      const quantity = Number(trade.quantity) || 0;
-      const tradePrice = Number(trade.tradePrice) || 0;
-      const fees = Number(trade.fees) || 0;
-      const costBasisPerShare = entry.quantity > 0 ? entry.initialValue / entry.quantity : entry.averageCost;
-
       if (trade.side === "buy") {
-        entry.initialValue += quantity * tradePrice + fees;
-        entry.quantity += quantity;
-        entry.averageCost = entry.quantity > 0 ? entry.initialValue / entry.quantity : 0;
+        bucket.costBasis += trade.quantity * trade.tradePrice + trade.fees;
+        bucket.quantity += trade.quantity;
+        bucket.averageCost = bucket.quantity > 0 ? bucket.costBasis / bucket.quantity : 0;
       } else {
-        const soldCostBasis = quantity * costBasisPerShare;
-        const proceeds = quantity * tradePrice - fees;
-        entry.realizedProfit += proceeds - soldCostBasis;
-        entry.quantity = Math.max(0, entry.quantity - quantity);
-        entry.initialValue = Math.max(0, entry.initialValue - soldCostBasis);
-        entry.averageCost = entry.quantity > 0 ? entry.initialValue / entry.quantity : 0;
+        const sellQuantity = Math.min(bucket.quantity, trade.quantity);
+        const proceeds = sellQuantity * trade.tradePrice - trade.fees;
+        const costRemoved = sellQuantity * bucket.averageCost;
+        bucket.realizedProfit += proceeds - costRemoved;
+        bucket.quantity -= sellQuantity;
+        bucket.costBasis -= costRemoved;
+        if (bucket.quantity <= 0.0000001) {
+          bucket.quantity = 0;
+          bucket.costBasis = 0;
+          bucket.averageCost = 0;
+        } else {
+          bucket.averageCost = bucket.costBasis / bucket.quantity;
+        }
       }
 
-      grouped.set(key, entry);
+      bucket.asset = trade.asset || bucket.asset;
+      bucket.sector = trade.sector || bucket.sector;
+      bucket.account = trade.account || bucket.account;
+      bucket.initialValue = bucket.quantity * bucket.averageCost;
+      ledger.set(key, bucket);
     });
 
-  const holdings = [...grouped.values()]
-    .filter((holding) => holding.quantity > 0 || Math.abs(holding.realizedProfit) > 0.005)
+  const holdings = [...ledger.values()]
+    .filter((holding) => holding.quantity > 0)
     .map((holding) => {
-      const quote = includeQuoteFields ? holding.latestQuote || {} : {};
-      const currentPrice = Number(quote.price) || 0;
-      const previousClose = Number(quote.previousClose) || currentPrice || 0;
-      const currentValue = currentPrice * holding.quantity;
-      const dayChange = (currentPrice - previousClose) * holding.quantity;
-      const dayPercentChange = previousClose > 0 ? (currentPrice - previousClose) / previousClose : 0;
-      const unrealizedProfit = currentValue - holding.initialValue;
-
+      const prior = priorMap.get(holding.symbol);
+      const currentPrice = preserveQuotes ? prior?.currentPrice || 0 : 0;
+      const previousClose = preserveQuotes ? prior?.previousClose || currentPrice : currentPrice;
+      const currentValue = holding.quantity * currentPrice;
+      const dayChange = holding.quantity * (currentPrice - previousClose);
       return {
         ...holding,
         currentPrice,
+        previousClose,
         currentValue,
         dayChange,
-        dayPercentChange,
-        unrealizedProfit,
+        dayPercentChange: previousClose > 0 ? (currentPrice - previousClose) / previousClose : 0,
+        unrealizedProfit: currentValue - holding.initialValue,
       };
     });
 
+  holdings.sort((a, b) => b.currentValue - a.currentValue);
   return holdings;
 }
 
 async function refreshPortfolioQuotes() {
-  const holdingsBase = deriveHoldingsFromTrades(appState.portfolio.trades, false);
-  if (!holdingsBase.length) {
-    setInlineStatus("portfolioStatus", "Add or import trades first.", "negative");
-    renderPortfolio();
+  const symbols = [...new Set(appState.portfolio.trades.map((trade) => trade.symbol).filter(Boolean))];
+  if (!symbols.length) {
+    setInlineStatus("portfolioStatus", "Add or import trades first, then refresh prices.", "negative");
     return;
   }
 
   setInlineStatus("portfolioStatus", "Refreshing quotes...", "neutral");
   const quotes = await Promise.all(
-    holdingsBase.map(async (holding) => {
+    symbols.map(async (symbol) => {
       try {
-        return await fetchStockData(holding.symbol);
+        const data = await fetchStockData(symbol);
+        return [symbol, data];
       } catch {
-        return null;
+        return [symbol, null];
       }
     }),
   );
 
-  const quoteMap = new Map();
-  quotes.forEach((quote) => {
-    if (quote?.symbol) quoteMap.set(quote.symbol, quote);
-  });
-
-  appState.portfolio.holdings = holdingsBase.map((holding) => {
-    const quote = quoteMap.get(holding.symbol) || {};
-    const currentPrice = Number(quote.price) || 0;
-    const previousClose = Number(quote.previousClose) || currentPrice || 0;
-    const currentValue = currentPrice * holding.quantity;
-    const dayChange = (currentPrice - previousClose) * holding.quantity;
-    const dayPercentChange = previousClose > 0 ? (currentPrice - previousClose) / previousClose : 0;
-    const unrealizedProfit = currentValue - holding.initialValue;
-
+  const quoteMap = new Map(quotes);
+  appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false).map((holding) => {
+    const quote = quoteMap.get(holding.symbol);
+    const currentPrice = Number(quote?.price) || 0;
+    const previousClose = Number(quote?.previousClose) || currentPrice;
+    const currentValue = holding.quantity * currentPrice;
+    const dayChange = holding.quantity * (currentPrice - previousClose);
     return {
       ...holding,
+      asset: holding.asset || quote?.name || holding.symbol,
+      sector: holding.sector || quote?.sector || "Unassigned",
       currentPrice,
+      previousClose,
       currentValue,
       dayChange,
-      dayPercentChange,
-      unrealizedProfit,
-      latestQuote: quote,
-      asset: holding.asset || quote.name || holding.symbol,
-      sector: holding.sector || quote.sector || "Unassigned",
+      dayPercentChange: previousClose > 0 ? (currentPrice - previousClose) / previousClose : 0,
+      unrealizedProfit: currentValue - holding.initialValue,
     };
   });
-
-  persistPortfolioState();
+  queuePortfolioDriveSync();
   renderPortfolio();
-  setInlineStatus("portfolioStatus", "Portfolio quotes refreshed.", "positive");
+  setInlineStatus("portfolioStatus", "Portfolio quotes updated.", "positive");
 }
 
-function portfolioTotals(holdings) {
-  const currentValue = holdings.reduce((sum, holding) => sum + (holding.currentValue || 0), 0);
-  const initialValue = holdings.reduce((sum, holding) => sum + (holding.initialValue || 0), 0);
-  const dayChange = holdings.reduce((sum, holding) => sum + (holding.dayChange || 0), 0);
-  const unrealizedProfit = holdings.reduce((sum, holding) => sum + (holding.unrealizedProfit || 0), 0);
-  const realizedProfit = holdings.reduce((sum, holding) => sum + (holding.realizedProfit || 0), 0);
-  return { currentValue, initialValue, dayChange, unrealizedProfit, realizedProfit };
+function getPortfolioWorkbookData() {
+  const holdings = deriveHoldingsFromTrades(appState.portfolio.trades, true);
+  return {
+    trades: appState.portfolio.trades.map((trade) => ({
+      Date: trade.date,
+      Symbol: trade.symbol,
+      Asset: trade.asset,
+      Sector: trade.sector,
+      Side: trade.side,
+      Quantity: trade.quantity,
+      "Trade Price": trade.tradePrice,
+      Fees: trade.fees,
+      Account: trade.account,
+      Notes: trade.notes,
+    })),
+    holdings: holdings.map((holding) => ({
+      Symbol: holding.symbol,
+      Asset: holding.asset,
+      Sector: holding.sector,
+      Quantity: holding.quantity,
+      "Average Cost": holding.averageCost,
+      "Initial Value": holding.initialValue,
+      Account: holding.account,
+    })),
+  };
 }
 
 function renderPortfolioCards(holdings) {
   const totals = portfolioTotals(holdings);
-  el("portfolioCards").innerHTML = [
-    ["Portfolio value", formatDollarValue(totals.currentValue), "Current market value"],
-    ["Day change", formatDollarValue(totals.dayChange), formatPercent(totals.currentValue ? totals.dayChange / totals.currentValue : 0), classForValue(totals.dayChange)],
-    ["Unrealized P/L", formatDollarValue(totals.unrealizedProfit), "Open positions only", classForValue(totals.unrealizedProfit)],
-    ["Realized P/L", formatDollarValue(totals.realizedProfit), "Closed gains and losses", classForValue(totals.realizedProfit)],
-  ]
+  const cards = [
+    ["Portfolio value", formatDollarValue(totals.currentValue)],
+    ["Day change", formatDollarValue(totals.dayChange), classForValue(totals.dayChange)],
+    ["Unrealized P/L", formatDollarValue(totals.unrealizedProfit), classForValue(totals.unrealizedProfit)],
+    ["Realized P/L", formatDollarValue(totals.realizedProfit), classForValue(totals.realizedProfit)],
+  ];
+
+  el("portfolioCards").innerHTML = cards
     .map(
-      ([label, value, sub, tone]) => `
-        <article class="metric-card ${tone || ""}">
+      ([label, value, extraClass = ""]) => `
+        <article class="metric-card ${extraClass}">
           <span>${label}</span>
           <strong>${value}</strong>
-          <p>${sub}</p>
         </article>
       `,
     )
@@ -1300,21 +1571,22 @@ function renderPortfolioTrades() {
     tbody.innerHTML = `<tr><td colspan="8" class="small-muted">No trades yet.</td></tr>`;
     return;
   }
+
   tbody.innerHTML = appState.portfolio.trades
     .map(
       (trade) => `
         <tr>
           <td>${formatDate(trade.date)}</td>
           <td>${trade.symbol}</td>
-          <td>${trade.side.toUpperCase()}</td>
+          <td>${trade.side}</td>
           <td>${trade.quantity}</td>
           <td>${formatDollarValue(trade.tradePrice)}</td>
           <td>${formatDollarValue(trade.fees)}</td>
-          <td>${safeText(trade.account, "Account")}</td>
+          <td>${safeText(trade.account, "Primary")}</td>
           <td>
             <div class="table-actions">
-              <button class="tiny-button" type="button" data-trade-action="edit" data-trade-id="${trade.id}">Edit</button>
-              <button class="tiny-button danger" type="button" data-trade-action="delete" data-trade-id="${trade.id}">Delete</button>
+              <button class="ghost-icon-button" data-trade-action="edit" data-trade-id="${trade.id}" type="button">Edit</button>
+              <button class="ghost-icon-button" data-trade-action="delete" data-trade-id="${trade.id}" type="button">Delete</button>
             </div>
           </td>
         </tr>
@@ -1442,6 +1714,7 @@ function renderPortfolio() {
   renderPortfolioTrades();
   renderPortfolioHoldings();
   renderPortfolioCharts(appState.portfolio.holdings);
+  renderPortfolioSyncState();
 }
 
 function resetTradeForm() {
@@ -1491,10 +1764,16 @@ async function handleTradeSubmit(event) {
     const trade = readTradeForm();
     upsertTrade(trade);
     appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
-    persistPortfolioState();
+    queuePortfolioDriveSync();
     renderPortfolio();
     resetTradeForm();
-    setInlineStatus("portfolioStatus", "Trade saved. Pull latest info to refresh quotes.", "positive");
+    setInlineStatus(
+      "portfolioStatus",
+      appState.driveAuth.connected
+        ? "Trade saved locally and queued for Drive sync. Pull latest info to refresh quotes."
+        : "Trade saved locally. Connect Drive to make it permanent across devices.",
+      "positive",
+    );
   } catch (error) {
     setInlineStatus("portfolioStatus", error.message, "negative");
   }
@@ -1521,9 +1800,9 @@ function editTrade(tradeId) {
 function deleteTrade(tradeId) {
   appState.portfolio.trades = appState.portfolio.trades.filter((item) => item.id !== tradeId);
   appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
-  persistPortfolioState();
+  queuePortfolioDriveSync();
   renderPortfolio();
-  setInlineStatus("portfolioStatus", "Trade deleted.", "positive");
+  setInlineStatus("portfolioStatus", appState.driveAuth.connected ? "Trade deleted and queued for Drive sync." : "Trade deleted locally.", "positive");
 }
 
 function rowsHaveColumns(rows, required) {
@@ -1761,6 +2040,22 @@ function bindWatchlistActions() {
 function bindPortfolioActions() {
   el("tradeForm").addEventListener("submit", handleTradeSubmit);
   el("resetTradeForm").addEventListener("click", resetTradeForm);
+  el("connectDriveButton").addEventListener("click", connectDrive);
+  el("disconnectDriveButton").addEventListener("click", () => {
+    disconnectDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
+  });
+  el("syncPortfolioNowButton").addEventListener("click", () => {
+    syncPortfolioToDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
+  });
+  el("loadDrivePortfolioButton").addEventListener("click", () => {
+    loadPortfolioFromDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
+  });
+  el("reloadRemotePortfolioButton").addEventListener("click", () => {
+    loadPortfolioFromDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
+  });
+  el("forceOverwriteRemoteButton").addEventListener("click", () => {
+    syncPortfolioToDrive({ force: true }).catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
+  });
   el("downloadPortfolioTemplate").addEventListener("click", downloadPortfolioTemplate);
   el("importPortfolioButton").addEventListener("click", () => el("portfolioFileInput").click());
   el("exportPortfolioButton").addEventListener("click", exportPortfolioWorkbook);
@@ -1774,9 +2069,15 @@ function bindPortfolioActions() {
       const imported = await importPortfolioWorkbook(file);
       appState.portfolio.trades = imported.trades;
       appState.portfolio.holdings = deriveHoldingsFromTrades(imported.trades, false);
-      persistPortfolioState();
+      queuePortfolioDriveSync();
       renderPortfolio();
-      setInlineStatus("portfolioStatus", "Workbook imported. Pull latest info to add current quotes.", "positive");
+      setInlineStatus(
+        "portfolioStatus",
+        appState.driveAuth.connected
+          ? "Workbook imported and queued for Drive sync. Pull latest info to add current quotes."
+          : "Workbook imported locally. Connect Drive to make it permanent across devices.",
+        "positive",
+      );
     } catch (error) {
       setInlineStatus("portfolioStatus", error.message, "negative");
     } finally {
@@ -1818,15 +2119,12 @@ function bindEvents() {
     "bearGrowth",
     "bearMargin",
     "bearPe",
-    "bearDilution",
     "baseGrowth",
     "baseMargin",
     "basePe",
-    "baseDilution",
     "bullGrowth",
     "bullMargin",
     "bullPe",
-    "bullDilution",
   ].forEach((id) => {
     el(id).addEventListener("input", () => {
       runProjection();
@@ -1874,10 +2172,10 @@ function runProjection() {
 }
 
 async function seedPortfolioIfEmpty() {
-  if (appState.portfolio.trades.length) return;
-  const seeded = await loadPortfolioSeedIfAvailable();
-  appState.portfolio = seeded || structuredClone(portfolioTemplate);
-  persistPortfolioState();
+  if (!appState.portfolio.trades.length && !appState.portfolio.holdings.length) {
+    appState.portfolio = structuredClone(portfolioTemplate);
+    persistPortfolioState();
+  }
 }
 
 async function init() {
@@ -1892,6 +2190,8 @@ async function init() {
   await seedPortfolioIfEmpty();
   bindEvents();
   resetTradeForm();
+  handleDriveAuthReturn();
+  await refreshDriveAuthStatus();
   runProjection();
   runCompare();
   runReverse();
@@ -1902,12 +2202,19 @@ async function init() {
     appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
   }
   renderPortfolio();
+  if (appState.driveAuth.connected && !appState.portfolio.trades.length) {
+    try {
+      await loadPortfolioFromDrive();
+    } catch {
+      renderPortfolioSyncState();
+    }
+  }
   toggleCompareView("historical");
 
   try {
     await loadProjectionHistoricalChart(el("ticker").value, appState.projectionHistoryRange);
   } catch {
-    setChartReadout("projectionHistoricalReadout", "Historical chart could not load yet. Fetch a ticker to try again.");
+    setChartReadout("projectionForwardReadout", "Price path could not load yet. Fetch a ticker to try again.");
   }
 
   try {
