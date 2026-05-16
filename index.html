@@ -135,6 +135,28 @@
               </div>
               <div class="metric-row" id="projectionCards"></div>
               <div class="details-grid" id="projectionDetails"></div>
+
+              <div class="chart-stack">
+                <article class="chart-card">
+                  <div class="chart-header">
+                    <div>
+                      <h2>Forward Projection</h2>
+                      <p class="small-muted">Click a year or drag across the path to inspect the scenarios.</p>
+                    </div>
+                    <div class="chart-toolbar">
+                      <div class="segmented-group" data-chart-mode-target="projectionForward">
+                        <button class="segmented-button active" type="button" data-mode="measure">Measure</button>
+                        <button class="segmented-button" type="button" data-mode="pan">Pan</button>
+                      </div>
+                      <button class="ghost-button" type="button" data-chart-reset="projectionForward">Reset</button>
+                    </div>
+                  </div>
+                  <div class="chart-shell">
+                    <canvas id="projectionForwardChart" height="180"></canvas>
+                  </div>
+                  <div class="chart-readout" id="projectionForwardReadout">Forward projection details will appear here.</div>
+                </article>
+              </div>
             </aside>
           </div>
 
@@ -164,26 +186,6 @@
                 <canvas id="projectionHistoricalChart" height="180"></canvas>
               </div>
               <div class="chart-readout" id="projectionHistoricalReadout">Historical chart details will appear here.</div>
-            </article>
-
-            <article class="chart-card">
-              <div class="chart-header">
-                <div>
-                  <h2>Forward Projection</h2>
-                  <p class="small-muted">Click a year or drag across the path to inspect the scenarios.</p>
-                </div>
-                <div class="chart-toolbar">
-                  <div class="segmented-group" data-chart-mode-target="projectionForward">
-                    <button class="segmented-button active" type="button" data-mode="measure">Measure</button>
-                    <button class="segmented-button" type="button" data-mode="pan">Pan</button>
-                  </div>
-                  <button class="ghost-button" type="button" data-chart-reset="projectionForward">Reset</button>
-                </div>
-              </div>
-              <div class="chart-shell">
-                <canvas id="projectionForwardChart" height="180"></canvas>
-              </div>
-              <div class="chart-readout" id="projectionForwardReadout">Forward projection details will appear here.</div>
             </article>
           </div>
         </section>
