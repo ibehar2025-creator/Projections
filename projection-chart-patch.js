@@ -1,614 +1,9 @@
 (function () {
-  if (window.__stockLabRuntimePatchApplied) return;
-  window.__stockLabRuntimePatchApplied = true;
-
-  const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
-  const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
-  const whole = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
-  const validTabs = new Set(["projection", "compare", "valuation", "watchlist", "portfolio"]);
+  if (window.__projectionChartPatchApplied) return;
+  window.__projectionChartPatchApplied = true;
 
   function byId(id) {
     return document.getElementById(id);
-  }
-
-  function numberValue(id) {
-    return Number(byId(id)?.value) || 0;
-  }
-
-  function escapeHtml(value) {
-    const span = document.createElement("span");
-    span.textContent = String(value ?? "");
-    return span.innerHTML;
-  }
-
-  function classForValue(value) {
-    if (!Number.isFinite(value) || value === 0) return "";
-    return value > 0 ? "value-positive" : "value-negative";
-  }
-
-  function safeSetStatus(id, message, tone = "neutral") {
-    if (typeof setInlineStatus === "function") {
-      setInlineStatus(id, message, tone);
-      return;
-    }
-    const node = byId(id);
-    if (!node) return;
-    node.textContent = message;
-    node.className = "inline-status";
-    if (tone === "positive") node.classList.add("value-positive");
-    if (tone === "negative") node.classList.add("value-negative");
-  }
-
-  function metricCard(label, value, copy, toneClass) {
-    return `
-      <article class="metric-card ${toneClass || ""}">
-        <span>${escapeHtml(label)}</span>
-        <strong>${value}</strong>
-        <p>${escapeHtml(copy)}</p>
-      </article>
-    `;
-  }
-
-  function normalizeImportDate(value) {
-    if (!value) return new Date().toISOString().slice(0, 10);
-    if (typeof value === "number" && window.XLSX?.SSF?.parse_date_code) {
-      const parsed = XLSX.SSF.parse_date_code(value);
-      if (parsed) return new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d)).toISOString().slice(0, 10);
-    }
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? new Date().toISOString().slice(0, 10) : date.toISOString().slice(0, 10);
-  }
-
-  function normalizeTradeRow(row = {}, index = 0) {
-    return {
-      id: row.id || row.Id || `import_${Date.now()}_${index}`,
-      date: normalizeImportDate(row.date || row.Date),
-      symbol: String(row.symbol || row.Symbol || "").trim().toUpperCase(),
-      asset: String(row.asset || row.Asset || "").trim(),
-      sector: String(row.sector || row.Sector || "Unassigned").trim(),
-      side: String(row.side || row.Side || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy",
-      quantity: Number(row.quantity ?? row.Quantity) || 0,
-      tradePrice: Number(row.tradePrice ?? row["Trade Price"] ?? row.averageCost ?? row["Average Cost"]) || 0,
-      fees: Number(row.fees ?? row.Fees) || 0,
-      account: String(row.account || row.Account || "Primary").trim(),
-      notes: String(row.notes || row.Notes || "").trim(),
-    };
-  }
-
-  function normalizeHoldingRow(row = {}) {
-    const quantity = Number(row.quantity ?? row.Quantity) || 0;
-    const averageCost = Number(row.averageCost ?? row["Average Cost"] ?? row.tradePrice ?? row["Trade Price"]) || 0;
-    const currentPrice = Number(row.currentPrice ?? row["Current Price"] ?? averageCost) || 0;
-    const initialValue = Number(row.initialValue ?? row["Initial Value"]) || quantity * averageCost;
-    const currentValue = Number(row.currentValue ?? row["Current Value"]) || quantity * currentPrice;
-    return {
-      symbol: String(row.symbol || row.Symbol || "").trim().toUpperCase(),
-      asset: String(row.asset || row.Asset || "").trim(),
-      sector: String(row.sector || row.Sector || "Unassigned").trim(),
-      quantity,
-      averageCost,
-      initialValue,
-      account: String(row.account || row.Account || "Primary").trim(),
-      realizedProfit: Number(row.realizedProfit ?? row["Realized Profit"]) || 0,
-      currentPrice,
-      currentValue,
-      dayChange: Number(row.dayChange ?? row["Day Change"]) || 0,
-      dayPercentChange: Number(row.dayPercentChange ?? row["Day % Change"]) || 0,
-      unrealizedProfit: Number(row.unrealizedProfit ?? row["Unrealized Profit"]) || currentValue - initialValue,
-      allocation: Number(row.allocation ?? row.Allocation) || 0,
-      latestQuote: row.latestQuote || null,
-    };
-  }
-
-  function normalizeHoldingsWithAllocation(holdings) {
-    const filtered = holdings.filter((holding) => holding.symbol && holding.quantity > 0);
-    const totalValue = filtered.reduce((sum, holding) => sum + (Number(holding.currentValue) || 0), 0);
-    return filtered.map((holding) => ({
-      ...holding,
-      allocation: totalValue > 0 ? ((Number(holding.currentValue) || 0) / totalValue) * 100 : 0,
-    }));
-  }
-
-  function holdingsToSyntheticTrades(holdings) {
-    return holdings.map((holding, index) => normalizeTradeRow({
-      id: `holding_import_${holding.symbol}_${index}`,
-      Date: new Date().toISOString().slice(0, 10),
-      Symbol: holding.symbol,
-      Asset: holding.asset,
-      Sector: holding.sector,
-      Side: "buy",
-      Quantity: holding.quantity,
-      "Trade Price": holding.averageCost || holding.currentPrice || 0,
-      Fees: 0,
-      Account: holding.account || "Primary",
-      Notes: "created_from_holding_snapshot",
-    }, index));
-  }
-
-  function deriveHoldings(trades, fallbackHoldings = []) {
-    if (trades.length && typeof deriveHoldingsFromTrades === "function") {
-      return normalizeHoldingsWithAllocation(deriveHoldingsFromTrades(trades).map(normalizeHoldingRow));
-    }
-    return normalizeHoldingsWithAllocation(fallbackHoldings.map(normalizeHoldingRow));
-  }
-
-  function normalizePortfolioPayload(payload = {}) {
-    const trades = Array.isArray(payload.trades)
-      ? payload.trades.map(normalizeTradeRow).filter((trade) => trade.symbol && trade.quantity > 0)
-      : [];
-    const holdingSource = Array.isArray(payload.holdingsSnapshot)
-      ? payload.holdingsSnapshot
-      : Array.isArray(payload.holdings)
-        ? payload.holdings
-        : [];
-    const holdingsSnapshot = normalizeHoldingsWithAllocation(holdingSource.map(normalizeHoldingRow));
-
-    if (trades.length) {
-      return { trades, holdings: deriveHoldings(trades, holdingsSnapshot) };
-    }
-
-    if (holdingsSnapshot.length) {
-      return {
-        trades: holdingsToSyntheticTrades(holdingsSnapshot),
-        holdings: holdingsSnapshot,
-      };
-    }
-
-    return { trades: [], holdings: [] };
-  }
-
-  window.runReverse = function runReversePatched() {
-    const price = numberValue("revPrice");
-    const eps = numberValue("revEps");
-    const exitPe = numberValue("revPe");
-    const years = Math.max(1, numberValue("revYears"));
-    const answer = byId("reverseAnswer");
-    if (!answer) return null;
-
-    if (price <= 0 || eps <= 0 || exitPe <= 0) {
-      answer.innerHTML = "<strong>Enter a positive price, EPS, and exit P/E.</strong>";
-      return null;
-    }
-
-    const impliedGrowth = Math.pow(price / (eps * exitPe), 1 / years) - 1;
-    const terminalEps = eps * Math.pow(1 + impliedGrowth, years);
-    answer.innerHTML = `
-      <strong>${percent.format(impliedGrowth)} implied EPS growth</strong>
-      <p>Current price implies ${money.format(terminalEps)} terminal EPS in ${whole.format(years)} years at ${whole.format(exitPe)}x earnings.</p>
-    `;
-    return { impliedGrowth, terminalEps };
-  };
-
-  window.runMos = function runMosPatched() {
-    const fairValue = numberValue("fairValue");
-    const currentPrice = numberValue("mosPrice");
-    const requiredSafety = Math.max(0, numberValue("mosPercent")) / 100;
-    const answer = byId("mosAnswer");
-    if (!answer) return null;
-
-    if (fairValue <= 0 || currentPrice <= 0) {
-      answer.innerHTML = "<strong>Enter a positive fair value and current price.</strong>";
-      return null;
-    }
-
-    const margin = (fairValue - currentPrice) / fairValue;
-    const buyBelow = fairValue * (1 - requiredSafety);
-    const clearsBar = currentPrice <= buyBelow;
-    answer.innerHTML = `
-      <strong class="${classForValue(margin)}">${percent.format(margin)} margin of safety</strong>
-      <p>${clearsBar ? "Clears" : "Does not clear"} your required discount. Buy-below price: ${money.format(buyBelow)}.</p>
-    `;
-    return { margin, buyBelow, clearsBar };
-  };
-
-  function bindCalculatorButtons() {
-    [
-      ["runReverse", window.runReverse],
-      ["runMos", window.runMos],
-    ].forEach(([id, handler]) => {
-      const button = byId(id);
-      if (!button || button.dataset.runtimePatchBound === "true") return;
-      button.dataset.runtimePatchBound = "true";
-      button.addEventListener(
-        "click",
-        (event) => {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          handler();
-        },
-        true,
-      );
-    });
-  }
-
-  function currentHashTab() {
-    const hash = window.location.hash.replace(/^#/, "");
-    return validTabs.has(hash) ? hash : "";
-  }
-
-  function installHashRouting() {
-    if (window.__stockLabHashRoutingInstalled) return;
-    const originalActivateTab = window.activateTab;
-    if (typeof originalActivateTab === "function") {
-      window.activateTab = function patchedActivateTab(tabId, options = {}) {
-        if (!validTabs.has(tabId)) return;
-        originalActivateTab(tabId);
-        if (options.updateHash !== false && window.location.hash !== `#${tabId}`) {
-          history.replaceState({}, "", `${window.location.pathname}${window.location.search}#${tabId}`);
-        }
-      };
-    }
-
-    document.addEventListener(
-      "click",
-      (event) => {
-        const button = event.target.closest("[data-tab]");
-        if (!button || !validTabs.has(button.dataset.tab) || typeof window.activateTab !== "function") return;
-        window.activateTab(button.dataset.tab);
-      },
-      true,
-    );
-
-    window.addEventListener("hashchange", () => {
-      const tab = currentHashTab();
-      if (tab && typeof window.activateTab === "function") {
-        window.activateTab(tab, { updateHash: false });
-      }
-    });
-
-    window.__stockLabHashRoutingInstalled = true;
-  }
-
-  function activateInitialHash() {
-    const tab = currentHashTab();
-    if (tab && typeof window.activateTab === "function") {
-      window.activateTab(tab, { updateHash: false });
-    }
-  }
-
-  function patchPortfolioDataFlows() {
-    if (typeof portfolioPayloadFromState === "function" && !window.__stockLabPortfolioPayloadPatched) {
-      portfolioPayloadFromState = function portfolioPayloadFromStatePatched() {
-        if (typeof ensurePortfolioDeviceId === "function") ensurePortfolioDeviceId();
-        const trades = Array.isArray(appState?.portfolio?.trades) ? appState.portfolio.trades.map((trade) => ({ ...trade })) : [];
-        const currentHoldings = Array.isArray(appState?.portfolio?.holdings) ? appState.portfolio.holdings.map((holding) => ({ ...holding })) : [];
-        const derivedHoldings = trades.length ? deriveHoldings(trades, currentHoldings) : currentHoldings;
-        return {
-          schemaVersion: 2,
-          updatedAt: new Date().toISOString(),
-          deviceId: appState?.portfolio?.sync?.deviceId || null,
-          trades,
-          holdingsSnapshot: normalizeHoldingsWithAllocation(derivedHoldings.map(normalizeHoldingRow)),
-        };
-      };
-      window.__stockLabPortfolioPayloadPatched = true;
-    }
-
-    if (typeof normalizeImportedTrade === "function" && !window.__stockLabTradeNormalizerPatched) {
-      normalizeImportedTrade = normalizeTradeRow;
-      window.__stockLabTradeNormalizerPatched = true;
-    }
-
-    if (typeof normalizeImportedHolding === "function" && !window.__stockLabHoldingNormalizerPatched) {
-      normalizeImportedHolding = normalizeHoldingRow;
-      window.__stockLabHoldingNormalizerPatched = true;
-    }
-
-    if (typeof importPortfolioWorkbook === "function" && !window.__stockLabImportPatched) {
-      const originalImportPortfolioWorkbook = importPortfolioWorkbook;
-      importPortfolioWorkbook = async function importPortfolioWorkbookPatched(file) {
-        const imported = await originalImportPortfolioWorkbook(file);
-        const normalized = normalizePortfolioPayload({
-          trades: imported?.trades || [],
-          holdingsSnapshot: imported?.holdings || [],
-        });
-        return normalized;
-      };
-      window.__stockLabImportPatched = true;
-    }
-
-    if (typeof applyDrivePortfolioPayload === "function" && !window.__stockLabDrivePayloadPatched) {
-      applyDrivePortfolioPayload = function applyDrivePortfolioPayloadPatched(payload, metadata = {}) {
-        const normalized = normalizePortfolioPayload(payload || {});
-        appState.portfolio.trades = normalized.trades;
-        appState.portfolio.holdings = normalized.holdings;
-        appState.portfolio.sync = {
-          ...appState.portfolio.sync,
-          remoteFileId: metadata.fileId || appState.portfolio.sync.remoteFileId || null,
-          lastSyncedAt: new Date().toISOString(),
-          remoteUpdatedAt: metadata.remoteUpdatedAt || payload?.updatedAt || null,
-          syncStatus: "synced",
-          remoteRevision: metadata.remoteRevision || metadata.remoteUpdatedAt || payload?.updatedAt || null,
-          deviceId: payload?.deviceId || appState.portfolio.sync.deviceId || null,
-        };
-        appState.portfolioRemoteConflict = null;
-        if (typeof persistPortfolioState === "function") persistPortfolioState();
-        if (typeof renderPortfolio === "function") renderPortfolio();
-        if (typeof renderPortfolioSyncState === "function") renderPortfolioSyncState();
-      };
-      window.__stockLabDrivePayloadPatched = true;
-    }
-
-    if (typeof loadPortfolioFromDrive === "function" && !window.__stockLabDriveLoaderPatched) {
-      const originalLoadPortfolioFromDrive = loadPortfolioFromDrive;
-      loadPortfolioFromDrive = async function loadPortfolioFromDrivePatched(...args) {
-        if (!appState?.driveAuth?.connected) {
-          safeSetStatus("portfolioStatus", "Connect Drive first to load your permanent private copy.", "negative");
-          return null;
-        }
-        const result = await originalLoadPortfolioFromDrive.apply(this, args);
-        const tradeCount = Array.isArray(appState?.portfolio?.trades) ? appState.portfolio.trades.length : 0;
-        const holdingCount = Array.isArray(appState?.portfolio?.holdings) ? appState.portfolio.holdings.length : 0;
-        safeSetStatus(
-          "portfolioStatus",
-          `Loaded ${whole.format(tradeCount)} trade${tradeCount === 1 ? "" : "s"} and ${whole.format(holdingCount)} holding${holdingCount === 1 ? "" : "s"} from private Drive.`,
-          "positive",
-        );
-        return result;
-      };
-      window.__stockLabDriveLoaderPatched = true;
-    }
-  }
-
-  function portfolioTotalValue(holdings) {
-    return holdings.reduce((sum, holding) => sum + (Number(holding.currentValue) || 0), 0);
-  }
-
-  function largestHolding(holdings) {
-    return holdings.reduce((largest, holding) => {
-      const currentValue = Number(holding.currentValue) || 0;
-      return currentValue > (Number(largest?.currentValue) || 0) ? holding : largest;
-    }, null);
-  }
-
-  function renderPortfolioEnhancements() {
-    const holdings = Array.isArray(appState?.portfolio?.holdings) ? appState.portfolio.holdings : [];
-    const hero = byId("portfolioHero");
-    const spotlight = byId("portfolioSpotlight");
-    if (!hero && !spotlight) return;
-
-    if (!holdings.length) {
-      if (hero) hero.innerHTML = '<div class="empty-state">Import a workbook or add a trade to build your portfolio dashboard.</div>';
-      if (spotlight) spotlight.innerHTML = '<div class="empty-state">Portfolio highlights will appear after holdings are added.</div>';
-      return;
-    }
-
-    const totalValue = portfolioTotalValue(holdings);
-    const totalCost = holdings.reduce((sum, holding) => sum + (Number(holding.initialValue) || 0), 0);
-    const dayChange = holdings.reduce((sum, holding) => sum + (Number(holding.dayChange) || 0), 0);
-    const largest = largestHolding(holdings);
-
-    if (hero) {
-      hero.innerHTML = [
-        metricCard("Market value", money.format(totalValue), `${whole.format(holdings.length)} active holding${holdings.length === 1 ? "" : "s"}`),
-        metricCard("Cost basis", money.format(totalCost), "Capital currently deployed"),
-        metricCard("Day change", money.format(dayChange), "Move versus previous close", classForValue(dayChange)),
-        metricCard("Largest position", escapeHtml(largest?.symbol || "N/A"), largest ? money.format(largest.currentValue || 0) : "No holdings"),
-      ].join("");
-    }
-
-    if (spotlight) {
-      const sectors = new Map();
-      holdings.forEach((holding) => {
-        const sector = holding.sector || "Unassigned";
-        sectors.set(sector, (sectors.get(sector) || 0) + (Number(holding.currentValue) || 0));
-      });
-      const [topSector = "Unassigned", topSectorValue = 0] = [...sectors.entries()].sort((a, b) => b[1] - a[1])[0] || [];
-      const biggestMover = holdings.reduce((best, holding) => {
-        const currentMove = Math.abs(Number(holding.dayChange) || 0);
-        const bestMove = Math.abs(Number(best?.dayChange) || 0);
-        return currentMove > bestMove ? holding : best;
-      }, null);
-
-      spotlight.innerHTML = [
-        metricCard("Concentration", escapeHtml(largest?.symbol || "N/A"), largest && totalValue > 0 ? `${percent.format((largest.currentValue || 0) / totalValue)} of portfolio` : "No current value yet"),
-        metricCard("Top sector", escapeHtml(topSector), totalValue > 0 ? `${percent.format(topSectorValue / totalValue)} of portfolio` : "No current value yet"),
-        metricCard("Biggest mover", escapeHtml(biggestMover?.symbol || "N/A"), biggestMover ? money.format(biggestMover.dayChange || 0) : "No quote refresh yet", biggestMover ? classForValue(biggestMover.dayChange || 0) : ""),
-        metricCard("Positions", whole.format(holdings.length), "Open holdings in the trade ledger"),
-      ].join("");
-    }
-  }
-
-  function runPortfolioProjectionPatch() {
-    const holdings = Array.isArray(appState?.portfolio?.holdings) ? appState.portfolio.holdings : [];
-    const totalValue = portfolioTotalValue(holdings);
-    const years = Math.max(1, Math.min(15, numberValue("years") || 5));
-    const status = byId("portfolioProjectionStatus");
-    const cards = byId("portfolioProjectionCards");
-    const scenarios = byId("portfolioProjectionScenarios");
-
-    if (!holdings.length || totalValue <= 0) {
-      if (status) {
-        status.textContent = "Add holdings and refresh quotes before running the portfolio projection.";
-        status.className = "inline-status value-negative";
-      }
-      if (cards) cards.innerHTML = "";
-      if (scenarios) scenarios.innerHTML = "";
-      return;
-    }
-
-    const projections = ["bear", "base", "bull"].map((key) => {
-      const label = key[0].toUpperCase() + key.slice(1);
-      const growth = numberValue(`${key}Growth`) / 100;
-      const terminalValue = totalValue * Math.pow(1 + growth, years);
-      return {
-        key,
-        label,
-        terminalValue,
-        gain: terminalValue - totalValue,
-        cagr: totalValue > 0 ? Math.pow(terminalValue / totalValue, 1 / years) - 1 : 0,
-      };
-    });
-    const base = projections.find((projection) => projection.key === "base");
-
-    if (cards) {
-      cards.innerHTML = [
-        metricCard("Current value", money.format(totalValue), "Starting portfolio value"),
-        metricCard("Projection years", whole.format(years), "Using the projection tab horizon"),
-        metricCard("Base ending value", money.format(base?.terminalValue || 0), "Base case portfolio estimate"),
-      ].join("");
-    }
-
-    if (scenarios) {
-      scenarios.innerHTML = projections
-        .map((projection) =>
-          metricCard(
-            `${projection.label} case`,
-            money.format(projection.terminalValue),
-            `${money.format(projection.gain)} projected gain, ${percent.format(projection.cagr)} CAGR`,
-            classForValue(projection.gain),
-          ),
-        )
-        .join("");
-    }
-
-    if (status) {
-      status.textContent = "Portfolio projection updated.";
-      status.className = "inline-status value-positive";
-    }
-  }
-
-  function bindPortfolioProjectionButton() {
-    const button = byId("runPortfolioProjection");
-    if (!button || button.dataset.runtimePatchBound === "true") return;
-    button.dataset.runtimePatchBound = "true";
-    button.addEventListener("click", runPortfolioProjectionPatch);
-  }
-
-  function improveDriveButtonState() {
-    const connected = Boolean(appState?.driveAuth?.connected);
-    const conflictRow = byId("portfolioConflictActions");
-    if (conflictRow && !connected) {
-      conflictRow.hidden = true;
-    }
-    [
-      ["syncPortfolioNowButton", "Connect Drive first to sync your permanent private copy."],
-      ["loadDrivePortfolioButton", "Connect Drive first to load your permanent private copy."],
-      ["disconnectDriveButton", "Drive is not connected yet."],
-    ].forEach(([id, title]) => {
-      const button = byId(id);
-      if (!button) return;
-      if (!connected) {
-        button.title = title;
-        button.setAttribute("aria-disabled", "true");
-      } else {
-        button.removeAttribute("title");
-        button.removeAttribute("aria-disabled");
-      }
-    });
-  }
-
-  function ensureToolbarIsFlat() {
-    const toolbar = document.querySelector(".portfolio-toolbar");
-    if (!toolbar || toolbar.dataset.runtimePatchFlattened === "true") return;
-    const groups = [...toolbar.querySelectorAll(".portfolio-toolbar-group")];
-    if (!groups.length) return;
-    const fragment = document.createDocumentFragment();
-    groups.forEach((group) => {
-      [...group.children].forEach((child) => fragment.appendChild(child));
-      group.remove();
-    });
-    toolbar.appendChild(fragment);
-    toolbar.dataset.runtimePatchFlattened = "true";
-  }
-
-  function installCssPatch() {
-    if (byId("stockLabRuntimePatchStyles")) return;
-    const style = document.createElement("style");
-    style.id = "stockLabRuntimePatchStyles";
-    style.textContent = `
-      .workspace-grid,
-      .compare-layout,
-      .portfolio-grid {
-        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-      }
-      .portfolio-hero-grid,
-      .portfolio-spotlight-grid,
-      .metric-row,
-      .metric-row-two,
-      #projectionCards,
-      #compareCards,
-      #portfolioCards,
-      #portfolioProjectionCards,
-      #sp500Cards {
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        align-items: stretch;
-      }
-      .portfolio-dashboard-grid {
-        grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
-      }
-      .details-grid,
-      #projectionDetails {
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      }
-      .metric-card,
-      .detail-card,
-      .watch-card {
-        display: flex;
-        flex-direction: column;
-        height: 100%;
-      }
-      .results-panel,
-      .tool-panel,
-      .chart-card,
-      .table-card,
-      .data-card,
-      .section-heading > div,
-      .chart-header > div,
-      .watchlist-header > div,
-      .portfolio-header > div {
-        min-width: 0;
-      }
-      .portfolio-header {
-        gap: 8px;
-      }
-      .portfolio-toolbar {
-        display: flex !important;
-        flex-wrap: wrap;
-        gap: 10px;
-        align-items: center;
-        width: 100%;
-      }
-      .portfolio-toolbar > * {
-        flex: 0 0 auto;
-      }
-      .portfolio-toolbar .primary-button {
-        min-width: 156px;
-      }
-      .data-card .button-row {
-        margin-top: 16px;
-      }
-      @media (max-width: 760px) {
-        .portfolio-toolbar {
-          display: grid !important;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-        .portfolio-toolbar > * {
-          width: 100%;
-          min-width: 0;
-        }
-      }
-      @media (max-width: 520px) {
-        .portfolio-toolbar {
-          grid-template-columns: 1fr;
-        }
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
-  function installCompareCleanup() {
-    const fetchButton = byId("fetchCompare");
-    if (fetchButton) fetchButton.remove();
-    const compareHeading = document.querySelector("#compare .results-panel .section-heading h2");
-    if (compareHeading) compareHeading.textContent = "Summary";
-    const compareSubcopy = document.querySelector("#compare .results-panel .section-heading .small-muted");
-    if (compareSubcopy) compareSubcopy.textContent = "Compare both names side by side without the extra clutter.";
-  }
-
-  function installProjectionCleanup() {
-    const historicalCard = byId("projectionHistoricalChart")?.closest(".chart-card");
-    if (historicalCard) historicalCard.style.display = "none";
   }
 
   function addYearsToDate(baseValue, years) {
@@ -618,20 +13,75 @@
     return copy.getTime();
   }
 
+  function installRangeButtons() {
+    const toolbar = byId("projectionForwardChart")?.closest(".chart-card")?.querySelector(".chart-toolbar");
+    if (!toolbar || toolbar.querySelector('[data-chart-range-target="projectionHistorical"]')) return;
+
+    const rangeGroup = document.createElement("div");
+    rangeGroup.className = "segmented-group";
+    rangeGroup.dataset.chartRangeTarget = "projectionHistorical";
+    rangeGroup.innerHTML = `
+      <button class="segmented-button" type="button" data-range="1m">1M</button>
+      <button class="segmented-button" type="button" data-range="6m">6M</button>
+      <button class="segmented-button" type="button" data-range="1y">1Y</button>
+      <button class="segmented-button active" type="button" data-range="5y">5Y</button>
+      <button class="segmented-button" type="button" data-range="max">Max</button>
+    `;
+    toolbar.prepend(rangeGroup);
+
+    rangeGroup.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-range]");
+      if (!button) return;
+      rangeGroup.querySelectorAll(".segmented-button").forEach((node) => node.classList.remove("active"));
+      button.classList.add("active");
+      appState.projectionHistoryRange = button.dataset.range;
+      try {
+        await loadProjectionHistoricalChart(byId("ticker")?.value, appState.projectionHistoryRange);
+      } catch (error) {
+        setChartReadout("projectionForwardReadout", error.message || "Could not load updated price history.");
+      }
+    });
+  }
+
   function normalizeProjectionPanel() {
     const projectionCard = byId("projectionForwardChart")?.closest(".chart-card");
+    const historicalCard = byId("projectionHistoricalChart")?.closest(".chart-card");
     const heading = projectionCard?.querySelector("h2");
     const subcopy = projectionCard?.querySelector(".small-muted");
     const readout = byId("projectionForwardReadout");
+
     if (heading) heading.textContent = "Price Path";
-    if (subcopy) subcopy.textContent = "Historical pricing and forward scenarios share one timeline so you can inspect the handoff cleanly.";
-    if (readout && !readout.textContent.trim()) readout.textContent = "Price-path details will appear here.";
+    if (subcopy) {
+      subcopy.textContent =
+        "Historical pricing and forward scenarios share one timeline so you can inspect the handoff cleanly.";
+    }
+    if (readout && !readout.textContent.trim()) {
+      readout.textContent = "Price-path details will appear here.";
+    }
+    if (historicalCard) {
+      historicalCard.style.display = "none";
+    }
+    installRangeButtons();
+  }
+
+  const originalCreateLineChart = window.createLineChart;
+  if (typeof originalCreateLineChart === "function") {
+    window.createLineChart = function patchedCreateLineChart(chartKey, canvasId, config) {
+      const chart = originalCreateLineChart(chartKey, canvasId, config);
+      if (chart) {
+        requestAnimationFrame(() => {
+          chart.resize();
+          chart.update("none");
+        });
+      }
+      return chart;
+    };
   }
 
   function drawUnifiedProjectionChart(result, history) {
     const lastHistoryPoint = history?.points?.[history.points.length - 1];
-    if (!lastHistoryPoint || typeof createLineChart !== "function") {
-      if (typeof drawProjectionForwardChart === "function") drawProjectionForwardChart(result);
+    if (!lastHistoryPoint) {
+      drawProjectionForwardChart(result);
       return;
     }
 
@@ -668,97 +118,764 @@
 
     const chart = createLineChart("projectionForward", "projectionForwardChart", {
       readoutId: "projectionForwardReadout",
-      datasets,
-      xFormatter: (value) => new Date(Number(value)).getFullYear(),
+      xFormatter: (value) => formatDate(value),
       xTime: true,
+      datasets,
     });
 
     if (chart?.options?.scales?.x) {
+      chart.options.scales.x.type = "time";
       chart.options.scales.x.time = {
         unit: "year",
         tooltipFormat: "MMM d, yyyy",
-        displayFormats: { month: "MMM yyyy", year: "yyyy" },
+        displayFormats: {
+          month: "MMM yyyy",
+          year: "yyyy",
+        },
+      };
+      chart.options.scales.x.ticks = {
+        ...(chart.options.scales.x.ticks || {}),
+        maxRotation: 0,
+        autoSkip: true,
+        callback(value) {
+          const date = new Date(Number(value));
+          if (Number.isNaN(date.getTime())) return "";
+          return date.getFullYear();
+        },
       };
       chart.update("none");
     }
 
-    if (typeof setChartReadout === "function") {
-      setChartReadout(
-        "projectionForwardReadout",
-        `${history.symbol} ${history.rangeLabel} history and forward scenarios loaded on one timeline.`,
+    setChartReadout(
+      "projectionForwardReadout",
+      `${history.symbol} ${history.rangeLabel} history and forward scenarios loaded on one timeline.`,
+    );
+  }
+
+  const originalRenderProjection = window.renderProjection;
+  window.renderProjection = function patchedRenderProjection(result) {
+    originalRenderProjection(result);
+    const history = appState.__projectionUnifiedHistory;
+    if (history && String(history.symbol || "").toUpperCase() === result.input.ticker) {
+      drawUnifiedProjectionChart(result, history);
+    }
+    normalizeProjectionPanel();
+  };
+
+  window.loadProjectionHistoricalChart = async function patchedLoadProjectionHistoricalChart(symbol, range = "5y") {
+    const history = await fetchHistoricalData(symbol, range);
+    appState.__projectionUnifiedHistory = history;
+    if (appState.lastProjection && String(history.symbol || "").toUpperCase() === appState.lastProjection.input.ticker) {
+      drawUnifiedProjectionChart(appState.lastProjection, history);
+    }
+    normalizeProjectionPanel();
+    return history;
+  };
+
+  normalizeProjectionPanel();
+  setTimeout(async () => {
+    try {
+      if (typeof runProjection === "function") {
+        runProjection();
+      }
+      if (byId("ticker")?.value) {
+        await loadProjectionHistoricalChart(byId("ticker").value, appState.projectionHistoryRange || "5y");
+      }
+    } catch (error) {
+      setChartReadout("projectionForwardReadout", error.message || "Could not load the unified price path.");
+    }
+  }, 0);
+})();
+
+(function () {
+  if (window.__portfolioDashboardPatchApplied) return;
+  window.__portfolioDashboardPatchApplied = true;
+  if (typeof window === "undefined" || typeof appState === "undefined") return;
+
+  const patchCss = `
+    .portfolio-hero-grid,
+    .portfolio-dashboard-grid,
+    .portfolio-scenario-grid,
+    .portfolio-spotlight-grid {
+      display: grid;
+      gap: 16px;
+    }
+    .portfolio-hero-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 16px;
+    }
+    .portfolio-dashboard-grid {
+      grid-template-columns: minmax(420px, 1.2fr) minmax(320px, 0.8fr);
+      margin-bottom: 16px;
+      align-items: start;
+    }
+    .portfolio-scenario-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin-top: 14px;
+    }
+    .portfolio-spotlight-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .hero-card {
+      position: relative;
+      overflow: hidden;
+      min-height: 180px;
+      padding: 20px;
+      border: 1px solid rgba(92, 126, 168, 0.38);
+      border-radius: 16px;
+      background:
+        radial-gradient(circle at top right, rgba(79, 140, 255, 0.22), transparent 38%),
+        linear-gradient(180deg, rgba(19, 30, 47, 0.98), rgba(11, 18, 29, 0.98));
+      box-shadow: var(--shadow);
+    }
+    .hero-card::after {
+      content: "";
+      position: absolute;
+      inset: auto -30px -30px auto;
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: rgba(62, 207, 142, 0.08);
+    }
+    .hero-card span {
+      color: #9fb2cf;
+      font-size: 0.76rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .hero-card strong {
+      display: block;
+      margin: 18px 0 8px;
+      font-size: clamp(2rem, 4vw, 3.2rem);
+      line-height: 0.92;
+    }
+    .hero-card p {
+      max-width: 26ch;
+      margin-bottom: 0;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .portfolio-projection-panel .metric-row {
+      margin-top: 12px;
+    }
+    .scenario-card,
+    .spotlight-card {
+      min-height: 100%;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(18, 27, 42, 0.96), rgba(13, 20, 31, 0.96));
+    }
+    .scenario-card span,
+    .spotlight-card span {
+      color: var(--muted);
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .scenario-card strong,
+    .spotlight-card strong {
+      display: block;
+      margin: 12px 0 4px;
+      font-size: 1.45rem;
+      line-height: 1.05;
+    }
+    .scenario-card p,
+    .spotlight-card p {
+      margin-bottom: 0;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .scenario-card[data-case="bear"] { border-color: rgba(239, 107, 115, 0.4); }
+    .scenario-card[data-case="base"] { border-color: rgba(244, 183, 78, 0.4); }
+    .scenario-card[data-case="bull"] { border-color: rgba(62, 207, 142, 0.4); }
+    .portfolio-empty-card {
+      padding: 16px;
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      color: var(--muted);
+      background: rgba(12, 18, 28, 0.78);
+    }
+    @media (max-width: 1160px) {
+      .portfolio-hero-grid,
+      .portfolio-dashboard-grid,
+      .portfolio-scenario-grid,
+      .portfolio-spotlight-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 760px) {
+      .hero-card {
+        min-height: 0;
+        padding: 16px;
+      }
+      .hero-card strong {
+        margin-top: 14px;
+        font-size: 2rem;
+      }
+    }
+  `;
+
+  function injectStyles() {
+    if (document.getElementById("portfolioDashboardPatchStyles")) return;
+    const style = document.createElement("style");
+    style.id = "portfolioDashboardPatchStyles";
+    style.textContent = patchCss;
+    document.head.appendChild(style);
+  }
+
+  function normalizePatchedHolding(row) {
+    const normalized = typeof normalizeSeedHolding === "function" ? normalizeSeedHolding(row || {}) : row || {};
+    const quantity = Number(normalized.quantity) || 0;
+    const averageCost = Number(normalized.averageCost) || 0;
+    const currentPrice = Number(normalized.currentPrice) || 0;
+    const initialValue = Number(normalized.initialValue) || averageCost * quantity;
+    const currentValue = Number(normalized.currentValue) || currentPrice * quantity;
+    const unrealizedProfit = Number(normalized.unrealizedProfit) || currentValue - initialValue;
+    return {
+      ...normalized,
+      quantity,
+      averageCost,
+      initialValue,
+      currentPrice,
+      currentValue,
+      unrealizedProfit,
+      latestQuote: row?.latestQuote || normalized.latestQuote || null,
+    };
+  }
+
+  function getActivePortfolioHoldings() {
+    const localHoldings = Array.isArray(appState.portfolio?.holdings) ? appState.portfolio.holdings : [];
+    if (localHoldings.length) return localHoldings.map(normalizePatchedHolding);
+    if (Array.isArray(appState.portfolio?.trades) && appState.portfolio.trades.length) {
+      return deriveHoldingsFromTrades(appState.portfolio.trades, false);
+    }
+    return [];
+  }
+
+  function installPortfolioLayout() {
+    const status = document.getElementById("portfolioStatus");
+    const syncCard = status?.nextElementSibling;
+    const cards = document.getElementById("portfolioCards");
+    if (!status || !syncCard || !cards) return;
+
+    if (!document.getElementById("portfolioHero")) {
+      const hero = document.createElement("div");
+      hero.className = "portfolio-hero-grid";
+      hero.id = "portfolioHero";
+      syncCard.parentNode.insertBefore(hero, syncCard);
+    }
+
+    if (!document.getElementById("portfolioProjectionCards")) {
+      const dashboard = document.createElement("div");
+      dashboard.className = "portfolio-dashboard-grid";
+      dashboard.innerHTML = `
+        <article class="chart-card portfolio-projection-panel">
+          <div class="section-heading">
+            <div>
+              <h2>Full Portfolio Projection</h2>
+              <p class="small-muted">Runs bear, base, and bull projections across every holding and rolls them into one view.</p>
+            </div>
+            <button class="primary-button" id="runPortfolioProjection" type="button">Run full portfolio projection</button>
+          </div>
+          <p class="inline-status" id="portfolioProjectionStatus"></p>
+          <div class="metric-row" id="portfolioProjectionCards"></div>
+          <div class="portfolio-scenario-grid" id="portfolioProjectionScenarios"></div>
+        </article>
+        <article class="table-card">
+          <div class="section-heading">
+            <div>
+              <h2>Portfolio Snapshot</h2>
+              <p class="small-muted">Clean read on concentration, accounts, and the biggest movers.</p>
+            </div>
+          </div>
+          <div class="portfolio-spotlight-grid" id="portfolioSpotlight"></div>
+        </article>
+      `;
+      syncCard.parentNode.insertBefore(dashboard, syncCard);
+    }
+  }
+
+  window.normalizeImportedTrade = function normalizeImportedTradePatched(row, index) {
+    return {
+      id: row.id || row.Id || `import_${Date.now()}_${index}`,
+      date: normalizeImportDate(row.date || row.Date),
+      symbol: String(row.symbol || row.Symbol || "").trim().toUpperCase(),
+      asset: String(row.asset || row.Asset || "").trim(),
+      sector: String(row.sector || row.Sector || "Unassigned").trim(),
+      side: String(row.side || row.Side || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy",
+      quantity: Number(row.quantity ?? row.Quantity) || 0,
+      tradePrice: Number(row.tradePrice ?? row["Trade Price"]) || 0,
+      fees: Number(row.fees ?? row.Fees) || 0,
+      account: String(row.account || row.Account || "Primary").trim(),
+      notes: String(row.notes || row.Notes || "").trim(),
+    };
+  };
+
+  window.portfolioPayloadFromState = function portfolioPayloadFromStatePatched() {
+    ensurePortfolioDeviceId();
+    const holdingsSnapshot = appState.portfolio.trades.length
+      ? deriveHoldingsFromTrades(appState.portfolio.trades, false)
+      : getActivePortfolioHoldings();
+    return {
+      schemaVersion: 2,
+      updatedAt: new Date().toISOString(),
+      deviceId: appState.portfolio.sync.deviceId,
+      trades: appState.portfolio.trades.map((trade) => ({ ...trade })),
+      holdingsSnapshot,
+    };
+  };
+
+  window.applyDrivePortfolioPayload = function applyDrivePortfolioPayloadPatched(payload, metadata = {}) {
+    const trades = Array.isArray(payload?.trades) ? payload.trades.map(window.normalizeImportedTrade) : [];
+    const remoteHoldingsSource = Array.isArray(payload?.holdingsSnapshot)
+      ? payload.holdingsSnapshot
+      : Array.isArray(payload?.holdings)
+        ? payload.holdings
+        : [];
+    const remoteHoldings = remoteHoldingsSource.map(normalizePatchedHolding).filter((holding) => holding.symbol && holding.quantity > 0);
+    appState.portfolio.trades = trades;
+    appState.portfolio.holdings = trades.length ? deriveHoldingsFromTrades(trades, false) : remoteHoldings;
+    appState.portfolioProjection = null;
+    appState.portfolio.sync = {
+      ...appState.portfolio.sync,
+      remoteFileId: metadata.fileId || appState.portfolio.sync.remoteFileId || null,
+      lastSyncedAt: new Date().toISOString(),
+      remoteUpdatedAt: metadata.remoteUpdatedAt || payload?.updatedAt || null,
+      syncStatus: "synced",
+      remoteRevision: metadata.remoteRevision || metadata.remoteUpdatedAt || payload?.updatedAt || null,
+      deviceId: payload?.deviceId || appState.portfolio.sync.deviceId || null,
+    };
+    appState.portfolioRemoteConflict = null;
+    persistPortfolioState();
+    renderPortfolio();
+    renderPortfolioSyncState();
+  };
+
+  function renderPortfolioHero(holdings) {
+    const container = document.getElementById("portfolioHero");
+    if (!container) return;
+    if (!holdings.length) {
+      container.innerHTML = `
+        <article class="hero-card">
+          <span>Portfolio</span>
+          <strong>$0</strong>
+          <p>Import a workbook, sync from Drive, or add your first trade to light up the dashboard.</p>
+        </article>
+      `;
+      return;
+    }
+    const totals = portfolioTotals(holdings);
+    const totalGain = totals.unrealizedProfit + totals.realizedProfit;
+    const holdingsCount = holdings.length;
+    const accountsCount = new Set(holdings.map((holding) => safeText(holding.account, "Account"))).size;
+    const biggestPosition = [...holdings].sort((a, b) => (b.currentValue || 0) - (a.currentValue || 0))[0];
+    const totalReturn = totals.initialValue > 0 ? totalGain / totals.initialValue : 0;
+    container.innerHTML = [
+      ["Current value", formatDollarValue(totals.currentValue), `${holdingsCount} active holding${holdingsCount === 1 ? "" : "s"} across ${accountsCount} account${accountsCount === 1 ? "" : "s"}`],
+      ["Total gain", formatDollarValue(totalGain), `${formatPercent(totalReturn)} combined realized and unrealized return`, classForValue(totalGain)],
+      ["Capital at work", formatDollarValue(totals.initialValue), "Current cost basis still in open positions"],
+      [
+        "Top position",
+        biggestPosition ? biggestPosition.symbol : "N/A",
+        biggestPosition ? `${formatDollarValue(biggestPosition.currentValue || 0)} in ${safeText(biggestPosition.asset, biggestPosition.symbol)}` : "Add holdings to see concentration",
+      ],
+    ]
+      .map(
+        ([label, value, copy, extraClass = ""]) => `
+          <article class="hero-card">
+            <span>${label}</span>
+            <strong class="${extraClass}">${value}</strong>
+            <p>${copy}</p>
+          </article>
+        `,
+      )
+      .join("");
+  }
+
+  function renderPortfolioSpotlight(holdings) {
+    const container = document.getElementById("portfolioSpotlight");
+    if (!container) return;
+    if (!holdings.length) {
+      container.innerHTML = `<div class="portfolio-empty-card">No holdings yet. Once your portfolio loads, this section will call out concentration, best performers, and account exposure.</div>`;
+      return;
+    }
+    const totals = portfolioTotals(holdings);
+    const biggest = [...holdings].sort((a, b) => (b.currentValue || 0) - (a.currentValue || 0))[0];
+    const bestPerformer = [...holdings].sort((a, b) => (b.unrealizedProfit || 0) - (a.unrealizedProfit || 0))[0];
+    const bySector = holdings.reduce((map, holding) => {
+      const key = safeText(holding.sector, "Unassigned");
+      map.set(key, (map.get(key) || 0) + (holding.currentValue || 0));
+      return map;
+    }, new Map());
+    const byAccount = holdings.reduce((map, holding) => {
+      const key = safeText(holding.account, "Account");
+      map.set(key, (map.get(key) || 0) + (holding.currentValue || 0));
+      return map;
+    }, new Map());
+    const [topSector, topSectorValue] = [...bySector.entries()].sort((a, b) => b[1] - a[1])[0] || ["N/A", 0];
+    const [topAccount, topAccountValue] = [...byAccount.entries()].sort((a, b) => b[1] - a[1])[0] || ["N/A", 0];
+    container.innerHTML = [
+      [
+        "Largest position",
+        biggest ? biggest.symbol : "N/A",
+        biggest ? `${formatPercent(totals.currentValue ? (biggest.currentValue || 0) / totals.currentValue : 0)} of the portfolio at ${formatDollarValue(biggest.currentValue || 0)}` : "No positions loaded",
+      ],
+      [
+        "Best open winner",
+        bestPerformer ? bestPerformer.symbol : "N/A",
+        bestPerformer ? `${formatDollarValue(bestPerformer.unrealizedProfit || 0)} unrealized on ${safeText(bestPerformer.asset, bestPerformer.symbol)}` : "No positions loaded",
+        classForValue(bestPerformer?.unrealizedProfit || 0),
+      ],
+      ["Top sector", topSector, `${formatPercent(totals.currentValue ? topSectorValue / totals.currentValue : 0)} of current value`],
+      ["Largest account", topAccount, `${formatDollarValue(topAccountValue)} currently allocated`],
+    ]
+      .map(
+        ([label, value, copy, extraClass = ""]) => `
+          <article class="spotlight-card">
+            <span>${label}</span>
+            <strong class="${extraClass}">${value}</strong>
+            <p>${copy}</p>
+          </article>
+        `,
+      )
+      .join("");
+  }
+
+  function calculatePortfolioProjectionFromQuotes(holdings, quoteMap) {
+    const input = readProjectionInputs();
+    const years = Math.max(1, input.years || 1);
+    const cases = scenarioConfig.map((scenario) => ({
+      ...scenario,
+      growth: Number(input.cases[scenario.key]?.growth) || 0,
+      pe: Number(input.cases[scenario.key]?.pe) || 0,
+    }));
+    const enriched = holdings.map((holding) => {
+      const quote = quoteMap.get(holding.symbol) || holding.latestQuote || {};
+      const price = Number(quote.price) || Number(holding.currentPrice) || Number(holding.averageCost) || 0;
+      const eps = Number(quote.eps) || 0;
+      const currentValue = price * (holding.quantity || 0);
+      const scenarioValues = Object.fromEntries(
+        cases.map((scenario) => {
+          const futureEps = eps > 0 ? eps * Math.pow(1 + scenario.growth, years) : 0;
+          const futurePrice = futureEps > 0 ? futureEps * scenario.pe : 0;
+          return [scenario.key, futurePrice * (holding.quantity || 0)];
+        }),
+      );
+      return {
+        ...holding,
+        currentPrice: price,
+        currentValue,
+        eps,
+        scenarioValues,
+        hasProjectionData: eps > 0,
+      };
+    });
+    const projectedHoldings = enriched.filter((holding) => holding.hasProjectionData);
+    const totals = portfolioTotals(enriched);
+    const scenarioTotals = cases.map((scenario) => {
+      const totalValue = projectedHoldings.reduce((sum, holding) => sum + (holding.scenarioValues[scenario.key] || 0), 0);
+      return {
+        ...scenario,
+        totalValue,
+        returnPct: totals.currentValue > 0 ? totalValue / totals.currentValue - 1 : 0,
+        cagr: totals.currentValue > 0 && totalValue > 0 ? Math.pow(totalValue / totals.currentValue, 1 / years) - 1 : 0,
+      };
+    });
+    const projectedCurrentValue = projectedHoldings.reduce((sum, holding) => sum + (holding.currentValue || 0), 0);
+    return {
+      years,
+      holdings: enriched.sort((a, b) => (b.currentValue || 0) - (a.currentValue || 0)),
+      totals,
+      scenarioTotals,
+      projectedCurrentValue,
+      coverage: totals.currentValue > 0 ? projectedCurrentValue / totals.currentValue : 0,
+      missingSymbols: enriched.filter((holding) => !holding.hasProjectionData).map((holding) => holding.symbol),
+    };
+  }
+
+  function renderPortfolioProjection(result = appState.portfolioProjection) {
+    const cards = document.getElementById("portfolioProjectionCards");
+    const scenarios = document.getElementById("portfolioProjectionScenarios");
+    const status = document.getElementById("portfolioProjectionStatus");
+    if (!cards || !scenarios || !status) return;
+    if (!result || !result.holdings.length) {
+      cards.innerHTML = "";
+      scenarios.innerHTML = `<div class="portfolio-empty-card">Run the portfolio projection after your holdings load to see aggregate bear, base, and bull outcomes for the whole portfolio.</div>`;
+      status.textContent = "";
+      status.className = "inline-status";
+      return;
+    }
+    const base = result.scenarioTotals.find((scenario) => scenario.key === "base");
+    cards.innerHTML = [
+      ["Projected coverage", formatPercent(result.coverage), `${formatDollarValue(result.projectedCurrentValue)} of ${formatDollarValue(result.totals.currentValue)} has enough data to project`],
+      ["Base case value", formatDollarValue(base?.totalValue || 0), `${formatPercent(base?.returnPct || 0)} vs. current value`],
+      ["Base case CAGR", formatPercent(base?.cagr || 0), `${result.years}-year annualized return`],
+    ]
+      .map(
+        ([label, value, copy]) => `
+          <article class="metric-card">
+            <span>${label}</span>
+            <strong>${value}</strong>
+            <p>${copy}</p>
+          </article>
+        `,
+      )
+      .join("");
+    scenarios.innerHTML = result.scenarioTotals
+      .map((scenario) => `
+        <article class="scenario-card" data-case="${scenario.key}">
+          <span>${scenario.label} case</span>
+          <strong>${formatDollarValue(scenario.totalValue)}</strong>
+          <p>${formatPercent(scenario.returnPct)} upside and ${formatPercent(scenario.cagr)} CAGR over ${result.years} years.</p>
+        </article>
+      `)
+      .join("");
+    if (result.missingSymbols.length) {
+      status.textContent = `Projected ${wholeNumber.format(result.holdings.length - result.missingSymbols.length)} of ${wholeNumber.format(result.holdings.length)} holdings. Missing EPS data for ${result.missingSymbols.join(", ")}.`;
+      status.className = "inline-status value-negative";
+    } else {
+      status.textContent = `Projected all ${wholeNumber.format(result.holdings.length)} holdings using the current scenario assumptions from the Projection tab.`;
+      status.className = "inline-status value-positive";
+    }
+  }
+
+  window.renderPortfolio = function renderPortfolioPatched() {
+    installPortfolioLayout();
+    const holdings = getActivePortfolioHoldings();
+    appState.portfolio.holdings = holdings;
+    renderPortfolioHero(holdings);
+    renderPortfolioCards(holdings);
+    renderPortfolioSpotlight(holdings);
+    renderPortfolioTrades();
+    renderPortfolioHoldings();
+    renderPortfolioCharts(holdings);
+    renderPortfolioProjection();
+    renderPortfolioSyncState();
+  };
+
+  async function refreshPortfolioQuotesPatched() {
+    const holdingsBase = getActivePortfolioHoldings();
+    if (!holdingsBase.length) {
+      setInlineStatus("portfolioStatus", "Load or import your portfolio first.", "negative");
+      renderPortfolio();
+      return;
+    }
+    setInlineStatus("portfolioStatus", "Refreshing quotes...", "neutral");
+    const quotes = await Promise.all(
+      holdingsBase.map(async (holding) => {
+        try {
+          return await fetchStockData(holding.symbol);
+        } catch {
+          return null;
+        }
+      }),
+    );
+    const quoteMap = new Map();
+    quotes.forEach((quote) => {
+      if (quote?.symbol) quoteMap.set(quote.symbol, quote);
+    });
+    appState.portfolio.holdings = holdingsBase.map((holding) => {
+      const quote = quoteMap.get(holding.symbol) || holding.latestQuote || {};
+      const currentPrice = Number(quote.price) || Number(holding.currentPrice) || Number(holding.averageCost) || 0;
+      const previousClose = Number(quote.previousClose) || currentPrice || 0;
+      const currentValue = currentPrice * (holding.quantity || 0);
+      const dayChange = (currentPrice - previousClose) * (holding.quantity || 0);
+      const dayPercentChange = previousClose > 0 ? (currentPrice - previousClose) / previousClose : 0;
+      return {
+        ...holding,
+        asset: holding.asset || quote.name || holding.symbol,
+        sector: holding.sector || quote.sector || "Unassigned",
+        currentPrice,
+        currentValue,
+        dayChange,
+        dayPercentChange,
+        unrealizedProfit: currentValue - (holding.initialValue || 0),
+        latestQuote: quote,
+      };
+    });
+    appState.portfolioProjection = null;
+    queuePortfolioDriveSync();
+    renderPortfolio();
+    setInlineStatus("portfolioStatus", appState.driveAuth.connected ? "Portfolio quotes refreshed and queued for Drive sync." : "Portfolio quotes refreshed.", "positive");
+  }
+
+  async function runPortfolioProjectionPatched() {
+    const holdings = getActivePortfolioHoldings();
+    if (!holdings.length) {
+      setInlineStatus("portfolioProjectionStatus", "Load your portfolio first so the projection has holdings to analyze.", "negative");
+      return;
+    }
+    setInlineStatus("portfolioProjectionStatus", "Running projections across the full portfolio...", "neutral");
+    const quotes = await Promise.all(
+      holdings.map(async (holding) => {
+        try {
+          return await fetchStockData(holding.symbol);
+        } catch {
+          return null;
+        }
+      }),
+    );
+    const quoteMap = new Map();
+    quotes.forEach((quote) => {
+      if (quote?.symbol) quoteMap.set(quote.symbol, quote);
+    });
+    appState.portfolio.holdings = holdings.map((holding) => {
+      const quote = quoteMap.get(holding.symbol) || holding.latestQuote || {};
+      const currentPrice = Number(quote.price) || Number(holding.currentPrice) || Number(holding.averageCost) || 0;
+      const previousClose = Number(quote.previousClose) || currentPrice || 0;
+      const currentValue = currentPrice * (holding.quantity || 0);
+      const dayChange = (currentPrice - previousClose) * (holding.quantity || 0);
+      const dayPercentChange = previousClose > 0 ? (currentPrice - previousClose) / previousClose : 0;
+      return {
+        ...holding,
+        asset: holding.asset || quote.name || holding.symbol,
+        sector: holding.sector || quote.sector || "Unassigned",
+        currentPrice,
+        currentValue,
+        dayChange,
+        dayPercentChange,
+        unrealizedProfit: currentValue - (holding.initialValue || 0),
+        latestQuote: quote,
+      };
+    });
+    appState.portfolioProjection = calculatePortfolioProjectionFromQuotes(appState.portfolio.holdings, quoteMap);
+    queuePortfolioDriveSync();
+    renderPortfolio();
+  }
+
+  function bindPatchedPortfolioEvents() {
+    const refreshButton = document.getElementById("refreshPortfolioQuotes");
+    if (refreshButton && !refreshButton.dataset.portfolioPatchBound) {
+      refreshButton.dataset.portfolioPatchBound = "true";
+      refreshButton.addEventListener(
+        "click",
+        (event) => {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          refreshPortfolioQuotesPatched().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
+        },
+        true,
+      );
+    }
+
+    const projectionButton = document.getElementById("runPortfolioProjection");
+    if (projectionButton && !projectionButton.dataset.portfolioPatchBound) {
+      projectionButton.dataset.portfolioPatchBound = "true";
+      projectionButton.addEventListener("click", () => {
+        runPortfolioProjectionPatched().catch((error) => setInlineStatus("portfolioProjectionStatus", error.message, "negative"));
+      });
+    }
+
+    const fileInput = document.getElementById("portfolioFileInput");
+    if (fileInput && !fileInput.dataset.portfolioPatchBound) {
+      fileInput.dataset.portfolioPatchBound = "true";
+      fileInput.addEventListener(
+        "change",
+        async (event) => {
+          event.stopImmediatePropagation();
+          const [file] = event.target.files || [];
+          if (!file) return;
+          try {
+            const imported = await importPortfolioWorkbook(file);
+            appState.portfolio.trades = imported.trades;
+            appState.portfolio.holdings = imported.trades.length
+              ? deriveHoldingsFromTrades(imported.trades, false)
+              : imported.holdings.map(normalizePatchedHolding);
+            appState.portfolioProjection = null;
+            queuePortfolioDriveSync();
+            renderPortfolio();
+            setInlineStatus(
+              "portfolioStatus",
+              appState.driveAuth.connected
+                ? "Workbook imported and queued for Drive sync. Pull latest info to add current quotes."
+                : "Workbook imported locally. Connect Drive to make it permanent across devices.",
+              "positive",
+            );
+          } catch (error) {
+            setInlineStatus("portfolioStatus", error.message, "negative");
+          } finally {
+            event.target.value = "";
+          }
+        },
+        true,
       );
     }
   }
 
-  function wrapRenderers() {
-    if (typeof renderPortfolio === "function" && !window.__stockLabPortfolioRenderWrapped) {
-      const originalRenderPortfolio = renderPortfolio;
-      renderPortfolio = function renderPortfolioPatched(...args) {
-        const result = originalRenderPortfolio.apply(this, args);
-        ensureToolbarIsFlat();
-        improveDriveButtonState();
-        renderPortfolioEnhancements();
-        bindPortfolioProjectionButton();
-        return result;
-      };
-      window.__stockLabPortfolioRenderWrapped = true;
+  injectStyles();
+  installPortfolioLayout();
+  bindPatchedPortfolioEvents();
+  renderPortfolio();
+
+  if (appState.driveAuth?.connected && !getActivePortfolioHoldings().length && typeof loadPortfolioFromDrive === "function") {
+    loadPortfolioFromDrive().catch(() => {});
+  }
+})();
+
+(function () {
+  if (window.__compareAutoFetchPatchApplied) return;
+  window.__compareAutoFetchPatchApplied = true;
+
+  function compareTickersReady() {
+    const a = document.getElementById("compareATicker")?.value?.trim();
+    const b = document.getElementById("compareBTicker")?.value?.trim();
+    return Boolean(a && b);
+  }
+
+  let compareFetchTimer = null;
+  let compareFetchInFlight = false;
+  let lastCompareFetchKey = "";
+
+  async function autoFetchCompare(reason = "auto") {
+    if (!compareTickersReady() || typeof fetchCompareTickers !== "function") return;
+    const key = [
+      document.getElementById("compareATicker")?.value?.trim()?.toUpperCase(),
+      document.getElementById("compareBTicker")?.value?.trim()?.toUpperCase(),
+    ].join("|");
+
+    if (compareFetchInFlight || (reason === "tab" && key === lastCompareFetchKey)) {
+      return;
     }
 
-    if (typeof renderPortfolioSyncState === "function" && !window.__stockLabPortfolioSyncWrapped) {
-      const originalRenderPortfolioSyncState = renderPortfolioSyncState;
-      renderPortfolioSyncState = function renderPortfolioSyncStatePatched(...args) {
-        const result = originalRenderPortfolioSyncState.apply(this, args);
-        improveDriveButtonState();
-        return result;
-      };
-      window.__stockLabPortfolioSyncWrapped = true;
-    }
-
-    if (typeof renderProjection === "function" && !window.__stockLabProjectionRenderWrapped) {
-      const originalRenderProjection = renderProjection;
-      renderProjection = function renderProjectionPatched(result) {
-        originalRenderProjection(result);
-        const history = appState.__projectionUnifiedHistory;
-        if (history && String(history.symbol || "").toUpperCase() === result.input.ticker) {
-          drawUnifiedProjectionChart(result, history);
-        }
-        normalizeProjectionPanel();
-      };
-      window.__stockLabProjectionRenderWrapped = true;
-    }
-
-    if (typeof loadProjectionHistoricalChart === "function" && !window.__stockLabProjectionHistoryWrapped) {
-      const originalLoadProjectionHistoricalChart = loadProjectionHistoricalChart;
-      loadProjectionHistoricalChart = async function loadProjectionHistoricalChartPatched(symbol, range) {
-        const history = await originalLoadProjectionHistoricalChart(symbol, range);
-        appState.__projectionUnifiedHistory = history;
-        if (appState.lastProjection && String(history?.symbol || "").toUpperCase() === appState.lastProjection.input.ticker) {
-          drawUnifiedProjectionChart(appState.lastProjection, history);
-        }
-        normalizeProjectionPanel();
-        return history;
-      };
-      window.__stockLabProjectionHistoryWrapped = true;
+    compareFetchInFlight = true;
+    try {
+      await fetchCompareTickers();
+      lastCompareFetchKey = key;
+    } finally {
+      compareFetchInFlight = false;
     }
   }
 
-  function bootstrapPatches() {
-    bindCalculatorButtons();
-    installHashRouting();
-    patchPortfolioDataFlows();
-    wrapRenderers();
-    installCssPatch();
-    installCompareCleanup();
-    installProjectionCleanup();
-    ensureToolbarIsFlat();
-    improveDriveButtonState();
-    renderPortfolioEnhancements();
-    bindPortfolioProjectionButton();
-    normalizeProjectionPanel();
-    activateInitialHash();
+  function queueCompareFetch() {
+    clearTimeout(compareFetchTimer);
+    compareFetchTimer = setTimeout(() => {
+      autoFetchCompare().catch(() => {});
+    }, 450);
   }
 
-  bootstrapPatches();
-  setTimeout(bootstrapPatches, 0);
-  document.addEventListener("DOMContentLoaded", bootstrapPatches, { once: true });
+  const originalActivateTab = window.activateTab;
+  if (typeof originalActivateTab === "function") {
+    window.activateTab = function patchedCompareActivateTab(tabId) {
+      originalActivateTab(tabId);
+      if (tabId === "compare") {
+        autoFetchCompare("tab").catch(() => {});
+      }
+    };
+  }
+
+  ["compareATicker", "compareBTicker"].forEach((id) => {
+    const input = document.getElementById(id);
+    if (!input || input.dataset.compareAutoFetchBound) return;
+    input.dataset.compareAutoFetchBound = "true";
+    input.addEventListener("change", queueCompareFetch);
+    input.addEventListener("blur", queueCompareFetch);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        autoFetchCompare("enter").catch(() => {});
+      }
+    });
+  });
 })();
