@@ -176,6 +176,10 @@ h3 {
   display: none;
 }
 
+.mobile-nav[hidden] {
+  display: none !important;
+}
+
 .mobile-nav-link {
   width: 100%;
   min-height: 46px;
@@ -981,13 +985,16 @@ textarea:focus {
     left: 10px;
     right: 10px;
     z-index: 21;
-    display: grid;
     gap: 8px;
     padding: 12px;
     border: 1px solid var(--line);
     border-radius: 12px;
     background: rgba(12, 19, 30, 0.98);
     box-shadow: var(--shadow);
+  }
+
+  .mobile-nav:not([hidden]) {
+    display: grid;
   }
 
   .tab {
