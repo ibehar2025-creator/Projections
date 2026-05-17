@@ -90,6 +90,36 @@
     activateHashTab();
     if (typeof window.runReverse === "function") window.runReverse();
     if (typeof window.runMos === "function") window.runMos();
+    improveDriveButtonHelp();
+  }
+
+  function getDriveAuthState() {
+    try {
+      if (typeof appState !== "undefined") {
+        return appState.driveAuth || {};
+      }
+    } catch {
+      return {};
+    }
+    return {};
+  }
+
+  function improveDriveButtonHelp() {
+    const auth = getDriveAuthState();
+    const connected = Boolean(auth.connected);
+    const needsReconnect = Boolean(auth.needsReconnectForSheets);
+    const message = needsReconnect
+      ? "Reconnect Drive first so the dashboard can read your Portfolio spreadsheet."
+      : "Connect Drive first to load your Portfolio Google Sheet.";
+    ["loadDrivePortfolioButton", "reloadRemotePortfolioButton", "syncPortfolioNowButton", "forceOverwriteRemoteButton"].forEach((id) => {
+      const button = byId(id);
+      if (!button) return;
+      button.title = connected && !needsReconnect ? "" : message;
+      button.setAttribute("aria-label", `${button.textContent.trim()}${connected && !needsReconnect ? "" : `. ${message}`}`);
+    });
+    const meta = byId("portfolioSyncMeta");
+    if (!meta || connected) return;
+    meta.textContent = "Drive is not connected. Connect Drive first, then load your Portfolio Google Sheet.";
   }
 
   window.addEventListener("hashchange", activateHashTab);
@@ -97,5 +127,6 @@
     setTimeout(finishStartup, 0);
     setTimeout(finishStartup, 300);
     setTimeout(finishStartup, 900);
+    setTimeout(finishStartup, 1800);
   });
 })();
