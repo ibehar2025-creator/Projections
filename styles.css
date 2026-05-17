@@ -321,9 +321,14 @@ h3 {
 .chart-toolbar,
 .button-row {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.heading-actions,
+.button-row {
+  margin-top: 14px;
 }
 
 .input-grid,
@@ -489,6 +494,7 @@ textarea:focus {
   font-weight: 700;
   cursor: pointer;
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, opacity 0.16s ease;
+  white-space: nowrap;
 }
 
 .primary-button {
@@ -567,6 +573,8 @@ textarea:focus {
 .detail-card,
 .watch-card {
   padding: 14px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .metric-card span,
@@ -584,10 +592,13 @@ textarea:focus {
   display: block;
   margin: 8px 0 4px;
   line-height: 1.08;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .metric-card strong {
-  font-size: clamp(1.28rem, 2vw, 2rem);
+  font-size: clamp(1rem, 1.2vw + 0.9rem, 2rem);
 }
 
 .hero-card {
@@ -866,6 +877,36 @@ textarea:focus {
 
 .portfolio-header {
   align-items: flex-start;
+}
+
+.portfolio-header {
+  display: grid;
+  gap: 12px;
+}
+
+.portfolio-toolbar {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+}
+
+.portfolio-toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.portfolio-toolbar-group > * {
+  flex: 0 0 auto;
+}
+
+.portfolio-toolbar-group-primary {
+  justify-content: flex-end;
+}
+
+.portfolio-toolbar-group-primary .primary-button {
+  min-width: 156px;
 }
 
 .trade-form .input-grid {
@@ -1155,6 +1196,20 @@ textarea:focus {
     width: 100%;
   }
 
+  .portfolio-toolbar-group {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-toolbar-group > * {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .portfolio-toolbar-group-primary {
+    grid-template-columns: 1fr;
+  }
+
   .watch-card dl {
     grid-template-columns: 1fr;
     gap: 8px;
@@ -1200,6 +1255,10 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+  .portfolio-toolbar-group {
+    grid-template-columns: 1fr;
+  }
+
   input,
   select {
     height: 40px;
@@ -1207,7 +1266,7 @@ textarea:focus {
   }
 
   .metric-card strong {
-    font-size: 1.4rem;
+    font-size: clamp(0.95rem, 3.8vw, 1.4rem);
   }
 
   .chart-shell {
