@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node -r ./server-runtime-patch.cjs server.js",
+    "dev": "node -r ./server-runtime-patch.cjs server.js"
   },
   "engines": {
     "node": ">=18"
