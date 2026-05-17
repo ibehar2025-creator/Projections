@@ -11,7 +11,7 @@
       rel="stylesheet"
     />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-    <link rel="stylesheet" href="styles.css?v=4" />
+    <link rel="stylesheet" href="styles.css?v=6" />
     <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
@@ -22,6 +22,11 @@
   <body>
     <div class="app-shell">
       <header class="topbar">
+        <button class="menu-toggle" id="menuToggle" type="button" aria-expanded="false" aria-controls="mobileNav" aria-label="Open navigation menu">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
         <div>
           <p class="eyebrow">Private investing workspace</p>
           <h1>Stock Projection Lab</h1>
@@ -38,6 +43,14 @@
         <button class="tab" data-tab="valuation">Calculators</button>
         <button class="tab" data-tab="watchlist">Watchlist</button>
         <button class="tab" data-tab="portfolio">Portfolio</button>
+      </nav>
+      <div class="mobile-nav-backdrop" id="mobileNavBackdrop" hidden></div>
+      <nav class="mobile-nav" id="mobileNav" aria-label="Mobile stock tools" hidden>
+        <button class="mobile-nav-link active" data-tab="projection" type="button">Projection</button>
+        <button class="mobile-nav-link" data-tab="compare" type="button">Compare</button>
+        <button class="mobile-nav-link" data-tab="valuation" type="button">Calculators</button>
+        <button class="mobile-nav-link" data-tab="watchlist" type="button">Watchlist</button>
+        <button class="mobile-nav-link" data-tab="portfolio" type="button">Portfolio</button>
       </nav>
 
       <main>
@@ -436,6 +449,33 @@
           </div>
 
           <p class="inline-status" id="portfolioStatus"></p>
+          <div class="portfolio-hero-grid" id="portfolioHero"></div>
+
+          <div class="portfolio-dashboard-grid">
+            <article class="chart-card portfolio-projection-panel">
+              <div class="section-heading">
+                <div>
+                  <h2>Full Portfolio Projection</h2>
+                  <p class="small-muted">Runs bear, base, and bull projections across every holding and rolls them into one view.</p>
+                </div>
+                <button class="primary-button" id="runPortfolioProjection" type="button">Run full portfolio projection</button>
+              </div>
+              <p class="inline-status" id="portfolioProjectionStatus"></p>
+              <div class="metric-row" id="portfolioProjectionCards"></div>
+              <div class="portfolio-scenario-grid" id="portfolioProjectionScenarios"></div>
+            </article>
+
+            <article class="table-card">
+              <div class="section-heading">
+                <div>
+                  <h2>Portfolio Snapshot</h2>
+                  <p class="small-muted">Clean read on concentration, accounts, and the biggest movers.</p>
+                </div>
+              </div>
+              <div class="portfolio-spotlight-grid" id="portfolioSpotlight"></div>
+            </article>
+          </div>
+
           <div class="data-card">
             <strong>Portfolio Sync</strong>
             <p id="portfolioSyncMeta">Checking private Drive sync status...</p>
@@ -582,7 +622,7 @@
       </main>
     </div>
 
-    <script src="script.js?v=5"></script>
+    <script src="script.js?v=6"></script>
     <script src="projection-chart-patch.js?v=1"></script>
   </body>
 </html>
