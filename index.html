@@ -436,20 +436,22 @@
 
         <section class="panel" id="portfolio">
           <div class="portfolio-header">
-            <div>
-              <h2>Portfolio Dashboard</h2>
-              <p class="small-muted">Import a workbook, keep trades in sync, and refresh prices on demand.</p>
-            </div>
-            <div class="heading-actions">
-              <button class="ghost-button" id="connectDriveButton" type="button">Connect Drive</button>
-              <button class="ghost-button" id="syncPortfolioNowButton" type="button">Sync now</button>
-              <button class="ghost-button" id="loadDrivePortfolioButton" type="button">Load Drive copy</button>
-              <button class="ghost-button" id="disconnectDriveButton" type="button">Disconnect</button>
-              <button class="ghost-button" id="downloadPortfolioTemplate" type="button">Template</button>
-              <button class="ghost-button" id="importPortfolioButton" type="button">Import workbook</button>
-              <button class="ghost-button" id="exportPortfolioButton" type="button">Export workbook</button>
-              <button class="ghost-button" id="exportTradesCsvButton" type="button">Export trades CSV</button>
-              <button class="primary-button" id="refreshPortfolioQuotes" type="button">Pull latest info</button>
+            <div class="portfolio-toolbar">
+              <div class="portfolio-toolbar-group">
+                <button class="ghost-button" id="connectDriveButton" type="button">Connect Drive</button>
+                <button class="ghost-button" id="syncPortfolioNowButton" type="button">Sync now</button>
+                <button class="ghost-button" id="loadDrivePortfolioButton" type="button">Load Drive copy</button>
+                <button class="ghost-button" id="disconnectDriveButton" type="button">Disconnect</button>
+              </div>
+              <div class="portfolio-toolbar-group">
+                <button class="ghost-button" id="downloadPortfolioTemplate" type="button">Template</button>
+                <button class="ghost-button" id="importPortfolioButton" type="button">Import workbook</button>
+                <button class="ghost-button" id="exportPortfolioButton" type="button">Export workbook</button>
+                <button class="ghost-button" id="exportTradesCsvButton" type="button">Export trades CSV</button>
+              </div>
+              <div class="portfolio-toolbar-group portfolio-toolbar-group-primary">
+                <button class="primary-button" id="refreshPortfolioQuotes" type="button">Pull latest info</button>
+              </div>
             </div>
             <input id="portfolioFileInput" type="file" accept=".xlsx,.xls,.csv" hidden />
           </div>
@@ -472,12 +474,6 @@
             </article>
 
             <article class="table-card">
-              <div class="section-heading">
-                <div>
-                  <h2>Portfolio Snapshot</h2>
-                  <p class="small-muted">Clean read on concentration, accounts, and the biggest movers.</p>
-                </div>
-              </div>
               <div class="portfolio-spotlight-grid" id="portfolioSpotlight"></div>
             </article>
           </div>
