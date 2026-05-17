@@ -477,6 +477,10 @@
 
   function improveDriveButtonState() {
     const connected = Boolean(appState?.driveAuth?.connected);
+    const conflictRow = byId("portfolioConflictActions");
+    if (conflictRow && !connected) {
+      conflictRow.hidden = true;
+    }
     [
       ["syncPortfolioNowButton", "Connect Drive first to sync your permanent private copy."],
       ["loadDrivePortfolioButton", "Connect Drive first to load your permanent private copy."],
