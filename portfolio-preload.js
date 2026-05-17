@@ -13,17 +13,67 @@
     window.__stockLabChartCanvasGuard = true;
   }
 
-  if (typeof window.runReverse !== "function") {
-    window.runReverse = function runReversePreload() {
-      return null;
-    };
+  const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
+  const whole = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+  const oneDecimal = new Intl.NumberFormat("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+  function byId(id) {
+    return document.getElementById(id);
   }
 
-  if (typeof window.runMos !== "function") {
-    window.runMos = function runMosPreload() {
-      return null;
-    };
+  function numberValue(id) {
+    return Number(byId(id)?.value) || 0;
   }
+
+  function classForValue(value) {
+    if (!Number.isFinite(value) || value === 0) return "";
+    return value > 0 ? "value-positive" : "value-negative";
+  }
+
+  window.runReverse = function runReversePreload() {
+    const price = numberValue("revPrice");
+    const eps = numberValue("revEps");
+    const exitPe = numberValue("revPe");
+    const years = Math.max(1, numberValue("revYears"));
+    const answer = byId("reverseAnswer");
+    if (!answer) return null;
+
+    if (price <= 0 || eps <= 0 || exitPe <= 0) {
+      answer.innerHTML = "<strong>Enter a positive price, EPS, and exit P/E.</strong>";
+      return null;
+    }
+
+    const impliedGrowth = Math.pow(price / (eps * exitPe), 1 / years) - 1;
+    const terminalEps = eps * Math.pow(1 + impliedGrowth, years);
+    answer.innerHTML = `
+      <strong>${percent.format(impliedGrowth)} implied EPS growth</strong>
+      <p>Current price implies ${money.format(terminalEps)} terminal EPS in ${whole.format(years)} years at ${oneDecimal.format(exitPe)}x earnings.</p>
+    `;
+    return { impliedGrowth, terminalEps };
+  };
+
+  window.runMos = function runMosPreload() {
+    const fairValue = numberValue("fairValue");
+    const currentPrice = numberValue("mosPrice");
+    const requiredSafety = Math.max(0, numberValue("mosPercent")) / 100;
+    const answer = byId("mosAnswer");
+    if (!answer) return null;
+
+    if (fairValue <= 0 || currentPrice <= 0) {
+      answer.innerHTML = "<strong>Enter a positive fair value and current price.</strong>";
+      return null;
+    }
+
+    const margin = (fairValue - currentPrice) / fairValue;
+    const buyBelow = fairValue * (1 - requiredSafety);
+    const clearsBar = currentPrice <= buyBelow;
+    answer.innerHTML = `
+      <strong class="${classForValue(margin)}">${percent.format(margin)} margin of safety</strong>
+      <p>${clearsBar ? "Clears" : "Does not clear"} your required discount. Buy-below price: ${money.format(buyBelow)}.</p>
+    `;
+    return { margin, buyBelow, clearsBar };
+  };
 
   function activateHashTab() {
     const tabId = window.location.hash.replace(/^#/, "");
