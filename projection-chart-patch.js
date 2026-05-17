@@ -1,9 +1,51 @@
 (function () {
-  if (window.__projectionChartPatchApplied) return;
-  window.__projectionChartPatchApplied = true;
+  if (window.__stockLabRuntimePatchApplied) return;
+  window.__stockLabRuntimePatchApplied = true;
+
+  const innerHtmlDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
+  const blockedTags = "script,iframe,object,embed,link,meta,base";
+  const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
+  const whole = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
   function byId(id) {
     return document.getElementById(id);
+  }
+
+  function escapeHtml(value) {
+    const span = document.createElement("span");
+    span.textContent = String(value ?? "");
+    return span.innerHTML;
+  }
+
+  function sanitizeHtml(value) {
+    const template = document.createElement("template");
+    innerHtmlDescriptor.set.call(template, String(value ?? ""));
+    template.content.querySelectorAll(blockedTags).forEach((node) => node.remove());
+    template.content.querySelectorAll("*").forEach((node) => {
+      [...node.attributes].forEach((attribute) => {
+        const name = attribute.name.toLowerCase();
+        const attrValue = String(attribute.value || "").trim().toLowerCase();
+        const unsafeUrl = ["href", "src", "xlink:href"].includes(name) && attrValue.startsWith("javascript:");
+        if (name.startsWith("on") || unsafeUrl) {
+          node.removeAttribute(attribute.name);
+        }
+      });
+    });
+    return innerHtmlDescriptor.get.call(template);
+  }
+
+  if (innerHtmlDescriptor?.get && innerHtmlDescriptor?.set) {
+    Object.defineProperty(Element.prototype, "innerHTML", {
+      configurable: true,
+      enumerable: innerHtmlDescriptor.enumerable,
+      get() {
+        return innerHtmlDescriptor.get.call(this);
+      },
+      set(value) {
+        innerHtmlDescriptor.set.call(this, sanitizeHtml(value));
+      },
+    });
   }
 
   function addYearsToDate(baseValue, years) {
@@ -11,6 +53,181 @@
     const copy = new Date(date.getTime());
     copy.setFullYear(copy.getFullYear() + years);
     return copy.getTime();
+  }
+
+  function classForValue(value) {
+    if (!Number.isFinite(value) || value === 0) return "";
+    return value > 0 ? "value-positive" : "value-negative";
+  }
+
+  function portfolioTotalValue(holdings) {
+    return holdings.reduce((sum, holding) => sum + (Number(holding.currentValue) || 0), 0);
+  }
+
+  function largestHolding(holdings) {
+    return holdings.reduce((largest, holding) => {
+      const currentValue = Number(holding.currentValue) || 0;
+      return currentValue > (Number(largest?.currentValue) || 0) ? holding : largest;
+    }, null);
+  }
+
+  function metricCard(label, value, copy, toneClass) {
+    return `
+      <article class="metric-card ${toneClass || ""}">
+        <span>${escapeHtml(label)}</span>
+        <strong>${value}</strong>
+        <p>${escapeHtml(copy)}</p>
+      </article>
+    `;
+  }
+
+  function getHoldings() {
+    try {
+      return Array.isArray(appState?.portfolio?.holdings) ? appState.portfolio.holdings : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function normalizeImportedHoldingsForTrades(holdings) {
+    return holdings.map((holding, index) => ({
+      Date: new Date().toISOString().slice(0, 10),
+      Symbol: holding.symbol || holding.Symbol || "",
+      Asset: holding.asset || holding.Asset || "",
+      Sector: holding.sector || holding.Sector || "Unassigned",
+      Side: "buy",
+      Quantity: Number(holding.quantity ?? holding.Quantity) || 0,
+      "Trade Price": Number(holding.averageCost ?? holding["Average Cost"] ?? holding.currentPrice ?? holding["Current Price"]) || 0,
+      Fees: 0,
+      Account: holding.account || holding.Account || "Primary",
+      Notes: `holding_import_${index + 1}`,
+    }));
+  }
+
+  function ensureToolbarIsFlat() {
+    const toolbar = document.querySelector(".portfolio-toolbar");
+    if (!toolbar || toolbar.dataset.runtimePatchFlattened === "true") return;
+    const groups = [...toolbar.querySelectorAll(".portfolio-toolbar-group")];
+    if (!groups.length) return;
+
+    const fragment = document.createDocumentFragment();
+    groups.forEach((group) => {
+      [...group.children].forEach((child) => fragment.appendChild(child));
+      group.remove();
+    });
+    toolbar.appendChild(fragment);
+    toolbar.dataset.runtimePatchFlattened = "true";
+  }
+
+  function installCssPatch() {
+    if (byId("stockLabRuntimePatchStyles")) return;
+    const style = document.createElement("style");
+    style.id = "stockLabRuntimePatchStyles";
+    style.textContent = `
+      .workspace-grid,
+      .compare-layout {
+        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      }
+      .portfolio-grid {
+        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      }
+      .portfolio-hero-grid {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+      .portfolio-dashboard-grid {
+        grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+      }
+      .portfolio-spotlight-grid {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+      .metric-row,
+      .metric-row-two,
+      #projectionCards,
+      #compareCards,
+      #portfolioCards,
+      #portfolioProjectionCards,
+      #sp500Cards {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        align-items: stretch;
+      }
+      .details-grid,
+      #projectionDetails {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      }
+      .metric-card,
+      .detail-card,
+      .watch-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+      .results-panel,
+      .tool-panel,
+      .chart-card,
+      .table-card,
+      .data-card,
+      .section-heading > div,
+      .chart-header > div,
+      .watchlist-header > div,
+      .portfolio-header > div {
+        min-width: 0;
+      }
+      .portfolio-header {
+        gap: 8px;
+      }
+      .portfolio-toolbar {
+        display: flex !important;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        width: 100%;
+      }
+      .portfolio-toolbar > * {
+        flex: 0 0 auto;
+      }
+      .portfolio-toolbar .primary-button {
+        min-width: 156px;
+      }
+      .data-card .button-row {
+        margin-top: 16px;
+      }
+      @media (max-width: 760px) {
+        .portfolio-toolbar {
+          display: grid !important;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .portfolio-toolbar > * {
+          width: 100%;
+          min-width: 0;
+        }
+      }
+      @media (max-width: 520px) {
+        .portfolio-toolbar {
+          grid-template-columns: 1fr;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function installCompareCleanup() {
+    const fetchButton = byId("fetchCompare");
+    if (fetchButton) fetchButton.remove();
+
+    const compareHeading = document.querySelector("#compare .results-panel .section-heading h2");
+    if (compareHeading) compareHeading.textContent = "Summary";
+
+    const compareSubcopy = document.querySelector("#compare .results-panel .section-heading .small-muted");
+    if (compareSubcopy) {
+      compareSubcopy.textContent = "Compare both names side by side without the extra clutter.";
+    }
+  }
+
+  function installProjectionCleanup() {
+    const historicalCard = byId("projectionHistoricalChart")?.closest(".chart-card");
+    if (historicalCard) {
+      historicalCard.style.display = "none";
+    }
   }
 
   function installRangeButtons() {
@@ -45,7 +262,6 @@
 
   function normalizeProjectionPanel() {
     const projectionCard = byId("projectionForwardChart")?.closest(".chart-card");
-    const historicalCard = byId("projectionHistoricalChart")?.closest(".chart-card");
     const heading = projectionCard?.querySelector("h2");
     const subcopy = projectionCard?.querySelector(".small-muted");
     const readout = byId("projectionForwardReadout");
@@ -58,30 +274,15 @@
     if (readout && !readout.textContent.trim()) {
       readout.textContent = "Price-path details will appear here.";
     }
-    if (historicalCard) {
-      historicalCard.style.display = "none";
-    }
     installRangeButtons();
-  }
-
-  const originalCreateLineChart = window.createLineChart;
-  if (typeof originalCreateLineChart === "function") {
-    window.createLineChart = function patchedCreateLineChart(chartKey, canvasId, config) {
-      const chart = originalCreateLineChart(chartKey, canvasId, config);
-      if (chart) {
-        requestAnimationFrame(() => {
-          chart.resize();
-          chart.update("none");
-        });
-      }
-      return chart;
-    };
   }
 
   function drawUnifiedProjectionChart(result, history) {
     const lastHistoryPoint = history?.points?.[history.points.length - 1];
-    if (!lastHistoryPoint) {
-      drawProjectionForwardChart(result);
+    if (!lastHistoryPoint || typeof createLineChart !== "function") {
+      if (typeof drawProjectionForwardChart === "function") {
+        drawProjectionForwardChart(result);
+      }
       return;
     }
 
@@ -118,9 +319,11 @@
 
     const chart = createLineChart("projectionForward", "projectionForwardChart", {
       readoutId: "projectionForwardReadout",
-      xFormatter: (value) => formatDate(value),
-      xTime: true,
       datasets,
+      xType: "time",
+      xTitle: "Date",
+      yTitle: "Share price",
+      readoutFormatter: (context) => `${context.dataset.label}: ${formatDollarValue(context.parsed.y)}`,
     });
 
     if (chart?.options?.scales?.x) {
@@ -146,670 +349,231 @@
       chart.update("none");
     }
 
-    setChartReadout(
-      "projectionForwardReadout",
-      `${history.symbol} ${history.rangeLabel} history and forward scenarios loaded on one timeline.`,
-    );
-  }
-
-  const originalRenderProjection = window.renderProjection;
-  window.renderProjection = function patchedRenderProjection(result) {
-    originalRenderProjection(result);
-    const history = appState.__projectionUnifiedHistory;
-    if (history && String(history.symbol || "").toUpperCase() === result.input.ticker) {
-      drawUnifiedProjectionChart(result, history);
-    }
-    normalizeProjectionPanel();
-  };
-
-  window.loadProjectionHistoricalChart = async function patchedLoadProjectionHistoricalChart(symbol, range = "5y") {
-    const history = await fetchHistoricalData(symbol, range);
-    appState.__projectionUnifiedHistory = history;
-    if (appState.lastProjection && String(history.symbol || "").toUpperCase() === appState.lastProjection.input.ticker) {
-      drawUnifiedProjectionChart(appState.lastProjection, history);
-    }
-    normalizeProjectionPanel();
-    return history;
-  };
-
-  normalizeProjectionPanel();
-  setTimeout(async () => {
-    try {
-      if (typeof runProjection === "function") {
-        runProjection();
-      }
-      if (byId("ticker")?.value) {
-        await loadProjectionHistoricalChart(byId("ticker").value, appState.projectionHistoryRange || "5y");
-      }
-    } catch (error) {
-      setChartReadout("projectionForwardReadout", error.message || "Could not load the unified price path.");
-    }
-  }, 0);
-})();
-
-(function () {
-  if (window.__portfolioDashboardPatchApplied) return;
-  window.__portfolioDashboardPatchApplied = true;
-  if (typeof window === "undefined" || typeof appState === "undefined") return;
-
-  const patchCss = `
-    .portfolio-hero-grid,
-    .portfolio-dashboard-grid,
-    .portfolio-scenario-grid,
-    .portfolio-spotlight-grid {
-      display: grid;
-      gap: 16px;
-    }
-    .portfolio-hero-grid {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      margin-bottom: 16px;
-    }
-    .portfolio-dashboard-grid {
-      grid-template-columns: minmax(420px, 1.2fr) minmax(320px, 0.8fr);
-      margin-bottom: 16px;
-      align-items: start;
-    }
-    .portfolio-scenario-grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      margin-top: 14px;
-    }
-    .portfolio-spotlight-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .hero-card {
-      position: relative;
-      overflow: hidden;
-      min-height: 180px;
-      padding: 20px;
-      border: 1px solid rgba(92, 126, 168, 0.38);
-      border-radius: 16px;
-      background:
-        radial-gradient(circle at top right, rgba(79, 140, 255, 0.22), transparent 38%),
-        linear-gradient(180deg, rgba(19, 30, 47, 0.98), rgba(11, 18, 29, 0.98));
-      box-shadow: var(--shadow);
-    }
-    .hero-card::after {
-      content: "";
-      position: absolute;
-      inset: auto -30px -30px auto;
-      width: 120px;
-      height: 120px;
-      border-radius: 50%;
-      background: rgba(62, 207, 142, 0.08);
-    }
-    .hero-card span {
-      color: #9fb2cf;
-      font-size: 0.76rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-    .hero-card strong {
-      display: block;
-      margin: 18px 0 8px;
-      font-size: clamp(2rem, 4vw, 3.2rem);
-      line-height: 0.92;
-    }
-    .hero-card p {
-      max-width: 26ch;
-      margin-bottom: 0;
-      color: var(--muted);
-      line-height: 1.45;
-    }
-    .portfolio-projection-panel .metric-row {
-      margin-top: 12px;
-    }
-    .scenario-card,
-    .spotlight-card {
-      min-height: 100%;
-      padding: 16px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: linear-gradient(180deg, rgba(18, 27, 42, 0.96), rgba(13, 20, 31, 0.96));
-    }
-    .scenario-card span,
-    .spotlight-card span {
-      color: var(--muted);
-      font-size: 0.75rem;
-      font-weight: 700;
-      text-transform: uppercase;
-    }
-    .scenario-card strong,
-    .spotlight-card strong {
-      display: block;
-      margin: 12px 0 4px;
-      font-size: 1.45rem;
-      line-height: 1.05;
-    }
-    .scenario-card p,
-    .spotlight-card p {
-      margin-bottom: 0;
-      color: var(--muted);
-      line-height: 1.45;
-    }
-    .scenario-card[data-case="bear"] { border-color: rgba(239, 107, 115, 0.4); }
-    .scenario-card[data-case="base"] { border-color: rgba(244, 183, 78, 0.4); }
-    .scenario-card[data-case="bull"] { border-color: rgba(62, 207, 142, 0.4); }
-    .portfolio-empty-card {
-      padding: 16px;
-      border: 1px dashed var(--line);
-      border-radius: 12px;
-      color: var(--muted);
-      background: rgba(12, 18, 28, 0.78);
-    }
-    @media (max-width: 1160px) {
-      .portfolio-hero-grid,
-      .portfolio-dashboard-grid,
-      .portfolio-scenario-grid,
-      .portfolio-spotlight-grid {
-        grid-template-columns: 1fr;
-      }
-    }
-    @media (max-width: 760px) {
-      .hero-card {
-        min-height: 0;
-        padding: 16px;
-      }
-      .hero-card strong {
-        margin-top: 14px;
-        font-size: 2rem;
-      }
-    }
-  `;
-
-  function injectStyles() {
-    if (document.getElementById("portfolioDashboardPatchStyles")) return;
-    const style = document.createElement("style");
-    style.id = "portfolioDashboardPatchStyles";
-    style.textContent = patchCss;
-    document.head.appendChild(style);
-  }
-
-  function normalizePatchedHolding(row) {
-    const normalized = typeof normalizeSeedHolding === "function" ? normalizeSeedHolding(row || {}) : row || {};
-    const quantity = Number(normalized.quantity) || 0;
-    const averageCost = Number(normalized.averageCost) || 0;
-    const currentPrice = Number(normalized.currentPrice) || 0;
-    const initialValue = Number(normalized.initialValue) || averageCost * quantity;
-    const currentValue = Number(normalized.currentValue) || currentPrice * quantity;
-    const unrealizedProfit = Number(normalized.unrealizedProfit) || currentValue - initialValue;
-    return {
-      ...normalized,
-      quantity,
-      averageCost,
-      initialValue,
-      currentPrice,
-      currentValue,
-      unrealizedProfit,
-      latestQuote: row?.latestQuote || normalized.latestQuote || null,
-    };
-  }
-
-  function getActivePortfolioHoldings() {
-    const localHoldings = Array.isArray(appState.portfolio?.holdings) ? appState.portfolio.holdings : [];
-    if (localHoldings.length) return localHoldings.map(normalizePatchedHolding);
-    if (Array.isArray(appState.portfolio?.trades) && appState.portfolio.trades.length) {
-      return deriveHoldingsFromTrades(appState.portfolio.trades, false);
-    }
-    return [];
-  }
-
-  function installPortfolioLayout() {
-    const status = document.getElementById("portfolioStatus");
-    const syncCard = status?.nextElementSibling;
-    const cards = document.getElementById("portfolioCards");
-    if (!status || !syncCard || !cards) return;
-
-    if (!document.getElementById("portfolioHero")) {
-      const hero = document.createElement("div");
-      hero.className = "portfolio-hero-grid";
-      hero.id = "portfolioHero";
-      syncCard.parentNode.insertBefore(hero, syncCard);
-    }
-
-    if (!document.getElementById("portfolioProjectionCards")) {
-      const dashboard = document.createElement("div");
-      dashboard.className = "portfolio-dashboard-grid";
-      dashboard.innerHTML = `
-        <article class="chart-card portfolio-projection-panel">
-          <div class="section-heading">
-            <div>
-              <h2>Full Portfolio Projection</h2>
-              <p class="small-muted">Runs bear, base, and bull projections across every holding and rolls them into one view.</p>
-            </div>
-            <button class="primary-button" id="runPortfolioProjection" type="button">Run full portfolio projection</button>
-          </div>
-          <p class="inline-status" id="portfolioProjectionStatus"></p>
-          <div class="metric-row" id="portfolioProjectionCards"></div>
-          <div class="portfolio-scenario-grid" id="portfolioProjectionScenarios"></div>
-        </article>
-        <article class="table-card">
-          <div class="section-heading">
-            <div>
-              <h2>Portfolio Snapshot</h2>
-              <p class="small-muted">Clean read on concentration, accounts, and the biggest movers.</p>
-            </div>
-          </div>
-          <div class="portfolio-spotlight-grid" id="portfolioSpotlight"></div>
-        </article>
-      `;
-      syncCard.parentNode.insertBefore(dashboard, syncCard);
-    }
-  }
-
-  window.normalizeImportedTrade = function normalizeImportedTradePatched(row, index) {
-    return {
-      id: row.id || row.Id || `import_${Date.now()}_${index}`,
-      date: normalizeImportDate(row.date || row.Date),
-      symbol: String(row.symbol || row.Symbol || "").trim().toUpperCase(),
-      asset: String(row.asset || row.Asset || "").trim(),
-      sector: String(row.sector || row.Sector || "Unassigned").trim(),
-      side: String(row.side || row.Side || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy",
-      quantity: Number(row.quantity ?? row.Quantity) || 0,
-      tradePrice: Number(row.tradePrice ?? row["Trade Price"]) || 0,
-      fees: Number(row.fees ?? row.Fees) || 0,
-      account: String(row.account || row.Account || "Primary").trim(),
-      notes: String(row.notes || row.Notes || "").trim(),
-    };
-  };
-
-  window.portfolioPayloadFromState = function portfolioPayloadFromStatePatched() {
-    ensurePortfolioDeviceId();
-    const holdingsSnapshot = appState.portfolio.trades.length
-      ? deriveHoldingsFromTrades(appState.portfolio.trades, false)
-      : getActivePortfolioHoldings();
-    return {
-      schemaVersion: 2,
-      updatedAt: new Date().toISOString(),
-      deviceId: appState.portfolio.sync.deviceId,
-      trades: appState.portfolio.trades.map((trade) => ({ ...trade })),
-      holdingsSnapshot,
-    };
-  };
-
-  window.applyDrivePortfolioPayload = function applyDrivePortfolioPayloadPatched(payload, metadata = {}) {
-    const trades = Array.isArray(payload?.trades) ? payload.trades.map(window.normalizeImportedTrade) : [];
-    const remoteHoldingsSource = Array.isArray(payload?.holdingsSnapshot)
-      ? payload.holdingsSnapshot
-      : Array.isArray(payload?.holdings)
-        ? payload.holdings
-        : [];
-    const remoteHoldings = remoteHoldingsSource.map(normalizePatchedHolding).filter((holding) => holding.symbol && holding.quantity > 0);
-    appState.portfolio.trades = trades;
-    appState.portfolio.holdings = trades.length ? deriveHoldingsFromTrades(trades, false) : remoteHoldings;
-    appState.portfolioProjection = null;
-    appState.portfolio.sync = {
-      ...appState.portfolio.sync,
-      remoteFileId: metadata.fileId || appState.portfolio.sync.remoteFileId || null,
-      lastSyncedAt: new Date().toISOString(),
-      remoteUpdatedAt: metadata.remoteUpdatedAt || payload?.updatedAt || null,
-      syncStatus: "synced",
-      remoteRevision: metadata.remoteRevision || metadata.remoteUpdatedAt || payload?.updatedAt || null,
-      deviceId: payload?.deviceId || appState.portfolio.sync.deviceId || null,
-    };
-    appState.portfolioRemoteConflict = null;
-    persistPortfolioState();
-    renderPortfolio();
-    renderPortfolioSyncState();
-  };
-
-  function renderPortfolioHero(holdings) {
-    const container = document.getElementById("portfolioHero");
-    if (!container) return;
-    if (!holdings.length) {
-      container.innerHTML = `
-        <article class="hero-card">
-          <span>Portfolio</span>
-          <strong>$0</strong>
-          <p>Import a workbook, sync from Drive, or add your first trade to light up the dashboard.</p>
-        </article>
-      `;
-      return;
-    }
-    const totals = portfolioTotals(holdings);
-    const totalGain = totals.unrealizedProfit + totals.realizedProfit;
-    const holdingsCount = holdings.length;
-    const accountsCount = new Set(holdings.map((holding) => safeText(holding.account, "Account"))).size;
-    const biggestPosition = [...holdings].sort((a, b) => (b.currentValue || 0) - (a.currentValue || 0))[0];
-    const totalReturn = totals.initialValue > 0 ? totalGain / totals.initialValue : 0;
-    container.innerHTML = [
-      ["Current value", formatDollarValue(totals.currentValue), `${holdingsCount} active holding${holdingsCount === 1 ? "" : "s"} across ${accountsCount} account${accountsCount === 1 ? "" : "s"}`],
-      ["Total gain", formatDollarValue(totalGain), `${formatPercent(totalReturn)} combined realized and unrealized return`, classForValue(totalGain)],
-      ["Capital at work", formatDollarValue(totals.initialValue), "Current cost basis still in open positions"],
-      [
-        "Top position",
-        biggestPosition ? biggestPosition.symbol : "N/A",
-        biggestPosition ? `${formatDollarValue(biggestPosition.currentValue || 0)} in ${safeText(biggestPosition.asset, biggestPosition.symbol)}` : "Add holdings to see concentration",
-      ],
-    ]
-      .map(
-        ([label, value, copy, extraClass = ""]) => `
-          <article class="hero-card">
-            <span>${label}</span>
-            <strong class="${extraClass}">${value}</strong>
-            <p>${copy}</p>
-          </article>
-        `,
-      )
-      .join("");
-  }
-
-  function renderPortfolioSpotlight(holdings) {
-    const container = document.getElementById("portfolioSpotlight");
-    if (!container) return;
-    if (!holdings.length) {
-      container.innerHTML = `<div class="portfolio-empty-card">No holdings yet. Once your portfolio loads, this section will call out concentration, best performers, and account exposure.</div>`;
-      return;
-    }
-    const totals = portfolioTotals(holdings);
-    const biggest = [...holdings].sort((a, b) => (b.currentValue || 0) - (a.currentValue || 0))[0];
-    const bestPerformer = [...holdings].sort((a, b) => (b.unrealizedProfit || 0) - (a.unrealizedProfit || 0))[0];
-    const bySector = holdings.reduce((map, holding) => {
-      const key = safeText(holding.sector, "Unassigned");
-      map.set(key, (map.get(key) || 0) + (holding.currentValue || 0));
-      return map;
-    }, new Map());
-    const byAccount = holdings.reduce((map, holding) => {
-      const key = safeText(holding.account, "Account");
-      map.set(key, (map.get(key) || 0) + (holding.currentValue || 0));
-      return map;
-    }, new Map());
-    const [topSector, topSectorValue] = [...bySector.entries()].sort((a, b) => b[1] - a[1])[0] || ["N/A", 0];
-    const [topAccount, topAccountValue] = [...byAccount.entries()].sort((a, b) => b[1] - a[1])[0] || ["N/A", 0];
-    container.innerHTML = [
-      [
-        "Largest position",
-        biggest ? biggest.symbol : "N/A",
-        biggest ? `${formatPercent(totals.currentValue ? (biggest.currentValue || 0) / totals.currentValue : 0)} of the portfolio at ${formatDollarValue(biggest.currentValue || 0)}` : "No positions loaded",
-      ],
-      [
-        "Best open winner",
-        bestPerformer ? bestPerformer.symbol : "N/A",
-        bestPerformer ? `${formatDollarValue(bestPerformer.unrealizedProfit || 0)} unrealized on ${safeText(bestPerformer.asset, bestPerformer.symbol)}` : "No positions loaded",
-        classForValue(bestPerformer?.unrealizedProfit || 0),
-      ],
-      ["Top sector", topSector, `${formatPercent(totals.currentValue ? topSectorValue / totals.currentValue : 0)} of current value`],
-      ["Largest account", topAccount, `${formatDollarValue(topAccountValue)} currently allocated`],
-    ]
-      .map(
-        ([label, value, copy, extraClass = ""]) => `
-          <article class="spotlight-card">
-            <span>${label}</span>
-            <strong class="${extraClass}">${value}</strong>
-            <p>${copy}</p>
-          </article>
-        `,
-      )
-      .join("");
-  }
-
-  function calculatePortfolioProjectionFromQuotes(holdings, quoteMap) {
-    const input = readProjectionInputs();
-    const years = Math.max(1, input.years || 1);
-    const cases = scenarioConfig.map((scenario) => ({
-      ...scenario,
-      growth: Number(input.cases[scenario.key]?.growth) || 0,
-      pe: Number(input.cases[scenario.key]?.pe) || 0,
-    }));
-    const enriched = holdings.map((holding) => {
-      const quote = quoteMap.get(holding.symbol) || holding.latestQuote || {};
-      const price = Number(quote.price) || Number(holding.currentPrice) || Number(holding.averageCost) || 0;
-      const eps = Number(quote.eps) || 0;
-      const currentValue = price * (holding.quantity || 0);
-      const scenarioValues = Object.fromEntries(
-        cases.map((scenario) => {
-          const futureEps = eps > 0 ? eps * Math.pow(1 + scenario.growth, years) : 0;
-          const futurePrice = futureEps > 0 ? futureEps * scenario.pe : 0;
-          return [scenario.key, futurePrice * (holding.quantity || 0)];
-        }),
+    if (typeof setChartReadout === "function") {
+      setChartReadout(
+        "projectionForwardReadout",
+        `${history.symbol} ${history.rangeLabel} history and forward scenarios loaded on one timeline.`,
       );
-      return {
-        ...holding,
-        currentPrice: price,
-        currentValue,
-        eps,
-        scenarioValues,
-        hasProjectionData: eps > 0,
-      };
-    });
-    const projectedHoldings = enriched.filter((holding) => holding.hasProjectionData);
-    const totals = portfolioTotals(enriched);
-    const scenarioTotals = cases.map((scenario) => {
-      const totalValue = projectedHoldings.reduce((sum, holding) => sum + (holding.scenarioValues[scenario.key] || 0), 0);
+    }
+  }
+
+  function renderPortfolioEnhancements() {
+    const holdings = getHoldings();
+    const hero = byId("portfolioHero");
+    const spotlight = byId("portfolioSpotlight");
+    if (!hero && !spotlight) return;
+
+    if (!holdings.length) {
+      if (hero) hero.innerHTML = '<div class="empty-state">Import a workbook or add a trade to build your portfolio dashboard.</div>';
+      if (spotlight) spotlight.innerHTML = '<div class="empty-state">Portfolio highlights will appear after holdings are added.</div>';
+      return;
+    }
+
+    const totalValue = portfolioTotalValue(holdings);
+    const totalCost = holdings.reduce((sum, holding) => sum + (Number(holding.initialValue) || 0), 0);
+    const dayChange = holdings.reduce((sum, holding) => sum + (Number(holding.dayChange) || 0), 0);
+    const largest = largestHolding(holdings);
+
+    if (hero) {
+      hero.innerHTML = [
+        metricCard("Market value", money.format(totalValue), `${holdings.length} active holding${holdings.length === 1 ? "" : "s"}`),
+        metricCard("Cost basis", money.format(totalCost), "Capital currently deployed"),
+        metricCard("Day change", money.format(dayChange), "Move versus previous close", classForValue(dayChange)),
+        metricCard("Largest position", escapeHtml(largest?.symbol || "N/A"), largest ? money.format(largest.currentValue || 0) : "No holdings"),
+      ].join("");
+    }
+
+    if (spotlight) {
+      const biggestMover = holdings.reduce((best, holding) => {
+        const currentMove = Math.abs(Number(holding.dayChange) || 0);
+        const bestMove = Math.abs(Number(best?.dayChange) || 0);
+        return currentMove > bestMove ? holding : best;
+      }, null);
+      const sectors = new Map();
+      holdings.forEach((holding) => {
+        const sector = holding.sector || "Unassigned";
+        sectors.set(sector, (sectors.get(sector) || 0) + (Number(holding.currentValue) || 0));
+      });
+      const [topSector = "Unassigned", topSectorValue = 0] = [...sectors.entries()].sort((a, b) => b[1] - a[1])[0] || [];
+      spotlight.innerHTML = [
+        metricCard("Concentration", escapeHtml(largest?.symbol || "N/A"), largest && totalValue > 0 ? `${percent.format((largest.currentValue || 0) / totalValue)} of portfolio` : "No current value yet"),
+        metricCard("Top sector", escapeHtml(topSector), totalValue > 0 ? `${percent.format(topSectorValue / totalValue)} of portfolio` : "No current value yet"),
+        metricCard("Biggest mover", escapeHtml(biggestMover?.symbol || "N/A"), biggestMover ? money.format(biggestMover.dayChange || 0) : "No quote refresh yet", biggestMover ? classForValue(biggestMover.dayChange || 0) : ""),
+        metricCard("Positions", whole.format(holdings.length), "Open holdings in the trade ledger"),
+      ].join("");
+    }
+  }
+
+  function runPortfolioProjectionPatch() {
+    const holdings = getHoldings();
+    const totalValue = portfolioTotalValue(holdings);
+    const years = Math.max(1, Math.min(15, Number(byId("years")?.value) || 5));
+    const status = byId("portfolioProjectionStatus");
+    const cards = byId("portfolioProjectionCards");
+    const scenarios = byId("portfolioProjectionScenarios");
+
+    if (!holdings.length || totalValue <= 0) {
+      if (status) {
+        status.textContent = "Add holdings and refresh quotes before running the portfolio projection.";
+        status.className = "inline-status value-negative";
+      }
+      if (cards) cards.innerHTML = "";
+      if (scenarios) scenarios.innerHTML = "";
+      return;
+    }
+
+    const config = [
+      { key: "bear", label: "Bear" },
+      { key: "base", label: "Base" },
+      { key: "bull", label: "Bull" },
+    ];
+    const projections = config.map((scenario) => {
+      const growth = (Number(byId(`${scenario.key}Growth`)?.value) || 0) / 100;
+      const terminalValue = totalValue * Math.pow(1 + growth, years);
       return {
         ...scenario,
-        totalValue,
-        returnPct: totals.currentValue > 0 ? totalValue / totals.currentValue - 1 : 0,
-        cagr: totals.currentValue > 0 && totalValue > 0 ? Math.pow(totalValue / totals.currentValue, 1 / years) - 1 : 0,
+        terminalValue,
+        gain: terminalValue - totalValue,
+        cagr: totalValue > 0 ? Math.pow(terminalValue / totalValue, 1 / years) - 1 : 0,
       };
     });
-    const projectedCurrentValue = projectedHoldings.reduce((sum, holding) => sum + (holding.currentValue || 0), 0);
-    return {
-      years,
-      holdings: enriched.sort((a, b) => (b.currentValue || 0) - (a.currentValue || 0)),
-      totals,
-      scenarioTotals,
-      projectedCurrentValue,
-      coverage: totals.currentValue > 0 ? projectedCurrentValue / totals.currentValue : 0,
-      missingSymbols: enriched.filter((holding) => !holding.hasProjectionData).map((holding) => holding.symbol),
-    };
-  }
 
-  function renderPortfolioProjection(result = appState.portfolioProjection) {
-    const cards = document.getElementById("portfolioProjectionCards");
-    const scenarios = document.getElementById("portfolioProjectionScenarios");
-    const status = document.getElementById("portfolioProjectionStatus");
-    if (!cards || !scenarios || !status) return;
-    if (!result || !result.holdings.length) {
-      cards.innerHTML = "";
-      scenarios.innerHTML = `<div class="portfolio-empty-card">Run the portfolio projection after your holdings load to see aggregate bear, base, and bull outcomes for the whole portfolio.</div>`;
-      status.textContent = "";
-      status.className = "inline-status";
-      return;
+    if (cards) {
+      const base = projections.find((item) => item.key === "base");
+      cards.innerHTML = [
+        metricCard("Current value", money.format(totalValue), "Starting portfolio value"),
+        metricCard("Projection years", whole.format(years), "Using the projection tab horizon"),
+        metricCard("Base ending value", money.format(base?.terminalValue || 0), "Base case portfolio estimate"),
+      ].join("");
     }
-    const base = result.scenarioTotals.find((scenario) => scenario.key === "base");
-    cards.innerHTML = [
-      ["Projected coverage", formatPercent(result.coverage), `${formatDollarValue(result.projectedCurrentValue)} of ${formatDollarValue(result.totals.currentValue)} has enough data to project`],
-      ["Base case value", formatDollarValue(base?.totalValue || 0), `${formatPercent(base?.returnPct || 0)} vs. current value`],
-      ["Base case CAGR", formatPercent(base?.cagr || 0), `${result.years}-year annualized return`],
-    ]
-      .map(
-        ([label, value, copy]) => `
-          <article class="metric-card">
-            <span>${label}</span>
-            <strong>${value}</strong>
-            <p>${copy}</p>
-          </article>
-        `,
-      )
-      .join("");
-    scenarios.innerHTML = result.scenarioTotals
-      .map((scenario) => `
-        <article class="scenario-card" data-case="${scenario.key}">
-          <span>${scenario.label} case</span>
-          <strong>${formatDollarValue(scenario.totalValue)}</strong>
-          <p>${formatPercent(scenario.returnPct)} upside and ${formatPercent(scenario.cagr)} CAGR over ${result.years} years.</p>
-        </article>
-      `)
-      .join("");
-    if (result.missingSymbols.length) {
-      status.textContent = `Projected ${wholeNumber.format(result.holdings.length - result.missingSymbols.length)} of ${wholeNumber.format(result.holdings.length)} holdings. Missing EPS data for ${result.missingSymbols.join(", ")}.`;
-      status.className = "inline-status value-negative";
-    } else {
-      status.textContent = `Projected all ${wholeNumber.format(result.holdings.length)} holdings using the current scenario assumptions from the Projection tab.`;
+
+    if (scenarios) {
+      scenarios.innerHTML = projections
+        .map((projection) =>
+          metricCard(
+            `${projection.label} case`,
+            money.format(projection.terminalValue),
+            `${money.format(projection.gain)} projected gain, ${percent.format(projection.cagr)} CAGR`,
+            classForValue(projection.gain),
+          ),
+        )
+        .join("");
+    }
+
+    if (status) {
+      status.textContent = "Portfolio projection updated.";
       status.className = "inline-status value-positive";
     }
   }
 
-  window.renderPortfolio = function renderPortfolioPatched() {
-    installPortfolioLayout();
-    const holdings = getActivePortfolioHoldings();
-    appState.portfolio.holdings = holdings;
-    renderPortfolioHero(holdings);
-    renderPortfolioCards(holdings);
-    renderPortfolioSpotlight(holdings);
-    renderPortfolioTrades();
-    renderPortfolioHoldings();
-    renderPortfolioCharts(holdings);
-    renderPortfolioProjection();
-    renderPortfolioSyncState();
-  };
-
-  async function refreshPortfolioQuotesPatched() {
-    const holdingsBase = getActivePortfolioHoldings();
-    if (!holdingsBase.length) {
-      setInlineStatus("portfolioStatus", "Load or import your portfolio first.", "negative");
-      renderPortfolio();
-      return;
-    }
-    setInlineStatus("portfolioStatus", "Refreshing quotes...", "neutral");
-    const quotes = await Promise.all(
-      holdingsBase.map(async (holding) => {
-        try {
-          return await fetchStockData(holding.symbol);
-        } catch {
-          return null;
+  function patchImportAndDriveFlows() {
+    const originalImportWorkbook = window.importPortfolioWorkbook;
+    if (typeof originalImportWorkbook === "function" && !window.__stockLabImportPatched) {
+      window.importPortfolioWorkbook = async function patchedImportPortfolioWorkbook(file) {
+        const imported = await originalImportWorkbook(file);
+        if ((!imported.trades || !imported.trades.length) && Array.isArray(imported.holdings) && imported.holdings.length) {
+          imported.trades = normalizeImportedHoldingsForTrades(imported.holdings);
         }
-      }),
-    );
-    const quoteMap = new Map();
-    quotes.forEach((quote) => {
-      if (quote?.symbol) quoteMap.set(quote.symbol, quote);
-    });
-    appState.portfolio.holdings = holdingsBase.map((holding) => {
-      const quote = quoteMap.get(holding.symbol) || holding.latestQuote || {};
-      const currentPrice = Number(quote.price) || Number(holding.currentPrice) || Number(holding.averageCost) || 0;
-      const previousClose = Number(quote.previousClose) || currentPrice || 0;
-      const currentValue = currentPrice * (holding.quantity || 0);
-      const dayChange = (currentPrice - previousClose) * (holding.quantity || 0);
-      const dayPercentChange = previousClose > 0 ? (currentPrice - previousClose) / previousClose : 0;
-      return {
-        ...holding,
-        asset: holding.asset || quote.name || holding.symbol,
-        sector: holding.sector || quote.sector || "Unassigned",
-        currentPrice,
-        currentValue,
-        dayChange,
-        dayPercentChange,
-        unrealizedProfit: currentValue - (holding.initialValue || 0),
-        latestQuote: quote,
+        return imported;
       };
-    });
-    appState.portfolioProjection = null;
-    queuePortfolioDriveSync();
-    renderPortfolio();
-    setInlineStatus("portfolioStatus", appState.driveAuth.connected ? "Portfolio quotes refreshed and queued for Drive sync." : "Portfolio quotes refreshed.", "positive");
-  }
-
-  async function runPortfolioProjectionPatched() {
-    const holdings = getActivePortfolioHoldings();
-    if (!holdings.length) {
-      setInlineStatus("portfolioProjectionStatus", "Load your portfolio first so the projection has holdings to analyze.", "negative");
-      return;
+      window.__stockLabImportPatched = true;
     }
-    setInlineStatus("portfolioProjectionStatus", "Running projections across the full portfolio...", "neutral");
-    const quotes = await Promise.all(
-      holdings.map(async (holding) => {
-        try {
-          return await fetchStockData(holding.symbol);
-        } catch {
-          return null;
+
+    const originalApplyDrivePortfolioPayload = window.applyDrivePortfolioPayload;
+    if (typeof originalApplyDrivePortfolioPayload === "function" && !window.__stockLabDrivePayloadPatched) {
+      window.applyDrivePortfolioPayload = function patchedApplyDrivePortfolioPayload(payload, metadata) {
+        const safePayload = { ...(payload || {}) };
+        if ((!safePayload.trades || !safePayload.trades.length) && Array.isArray(safePayload.holdingsSnapshot) && safePayload.holdingsSnapshot.length) {
+          safePayload.trades = normalizeImportedHoldingsForTrades(safePayload.holdingsSnapshot);
         }
-      }),
-    );
-    const quoteMap = new Map();
-    quotes.forEach((quote) => {
-      if (quote?.symbol) quoteMap.set(quote.symbol, quote);
-    });
-    appState.portfolio.holdings = holdings.map((holding) => {
-      const quote = quoteMap.get(holding.symbol) || holding.latestQuote || {};
-      const currentPrice = Number(quote.price) || Number(holding.currentPrice) || Number(holding.averageCost) || 0;
-      const previousClose = Number(quote.previousClose) || currentPrice || 0;
-      const currentValue = currentPrice * (holding.quantity || 0);
-      const dayChange = (currentPrice - previousClose) * (holding.quantity || 0);
-      const dayPercentChange = previousClose > 0 ? (currentPrice - previousClose) / previousClose : 0;
-      return {
-        ...holding,
-        asset: holding.asset || quote.name || holding.symbol,
-        sector: holding.sector || quote.sector || "Unassigned",
-        currentPrice,
-        currentValue,
-        dayChange,
-        dayPercentChange,
-        unrealizedProfit: currentValue - (holding.initialValue || 0),
-        latestQuote: quote,
+        originalApplyDrivePortfolioPayload.call(this, safePayload, metadata);
+        renderPortfolioEnhancements();
       };
-    });
-    appState.portfolioProjection = calculatePortfolioProjectionFromQuotes(appState.portfolio.holdings, quoteMap);
-    queuePortfolioDriveSync();
-    renderPortfolio();
-  }
-
-  function bindPatchedPortfolioEvents() {
-    const refreshButton = document.getElementById("refreshPortfolioQuotes");
-    if (refreshButton && !refreshButton.dataset.portfolioPatchBound) {
-      refreshButton.dataset.portfolioPatchBound = "true";
-      refreshButton.addEventListener(
-        "click",
-        (event) => {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          refreshPortfolioQuotesPatched().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
-        },
-        true,
-      );
+      window.__stockLabDrivePayloadPatched = true;
     }
 
-    const projectionButton = document.getElementById("runPortfolioProjection");
-    if (projectionButton && !projectionButton.dataset.portfolioPatchBound) {
-      projectionButton.dataset.portfolioPatchBound = "true";
-      projectionButton.addEventListener("click", () => {
-        runPortfolioProjectionPatched().catch((error) => setInlineStatus("portfolioProjectionStatus", error.message, "negative"));
-      });
-    }
-
-    const fileInput = document.getElementById("portfolioFileInput");
-    if (fileInput && !fileInput.dataset.portfolioPatchBound) {
-      fileInput.dataset.portfolioPatchBound = "true";
-      fileInput.addEventListener(
-        "change",
-        async (event) => {
-          event.stopImmediatePropagation();
-          const [file] = event.target.files || [];
-          if (!file) return;
-          try {
-            const imported = await importPortfolioWorkbook(file);
-            appState.portfolio.trades = imported.trades;
-            appState.portfolio.holdings = imported.trades.length
-              ? deriveHoldingsFromTrades(imported.trades, false)
-              : imported.holdings.map(normalizePatchedHolding);
-            appState.portfolioProjection = null;
-            queuePortfolioDriveSync();
-            renderPortfolio();
-            setInlineStatus(
-              "portfolioStatus",
-              appState.driveAuth.connected
-                ? "Workbook imported and queued for Drive sync. Pull latest info to add current quotes."
-                : "Workbook imported locally. Connect Drive to make it permanent across devices.",
-              "positive",
-            );
-          } catch (error) {
-            setInlineStatus("portfolioStatus", error.message, "negative");
-          } finally {
-            event.target.value = "";
-          }
-        },
-        true,
-      );
+    const originalLoadPortfolioFromDrive = window.loadPortfolioFromDrive;
+    if (typeof originalLoadPortfolioFromDrive === "function" && !window.__stockLabDriveLoaderPatched) {
+      window.loadPortfolioFromDrive = async function patchedLoadPortfolioFromDrive(...args) {
+        const result = await originalLoadPortfolioFromDrive.apply(this, args);
+        const tradeCount = Array.isArray(appState?.portfolio?.trades) ? appState.portfolio.trades.length : 0;
+        const holdingCount = Array.isArray(appState?.portfolio?.holdings) ? appState.portfolio.holdings.length : 0;
+        if (typeof setInlineStatus === "function") {
+          setInlineStatus(
+            "portfolioStatus",
+            `Loaded ${tradeCount} trade${tradeCount === 1 ? "" : "s"} and ${holdingCount} holding${holdingCount === 1 ? "" : "s"} from private Drive.`,
+            "positive",
+          );
+        }
+        return result;
+      };
+      window.__stockLabDriveLoaderPatched = true;
     }
   }
 
-  injectStyles();
-  installPortfolioLayout();
-  bindPatchedPortfolioEvents();
-  renderPortfolio();
-
-  if (appState.driveAuth?.connected && !getActivePortfolioHoldings().length && typeof loadPortfolioFromDrive === "function") {
-    loadPortfolioFromDrive().catch(() => {});
+  function wrapPortfolioRender() {
+    if (typeof renderPortfolio === "function" && !window.__stockLabPortfolioRenderWrapped) {
+      const originalRenderPortfolio = renderPortfolio;
+      window.renderPortfolio = function patchedRenderPortfolio(...args) {
+        const result = originalRenderPortfolio.apply(this, args);
+        ensureToolbarIsFlat();
+        renderPortfolioEnhancements();
+        return result;
+      };
+      window.__stockLabPortfolioRenderWrapped = true;
+    }
   }
+
+  function wrapProjectionRender() {
+    if (typeof renderProjection === "function" && !window.__stockLabProjectionRenderWrapped) {
+      const originalRenderProjection = renderProjection;
+      window.renderProjection = function patchedRenderProjection(result) {
+        originalRenderProjection(result);
+        const history = appState.__projectionUnifiedHistory;
+        if (history && String(history.symbol || "").toUpperCase() === result.input.ticker) {
+          drawUnifiedProjectionChart(result, history);
+        }
+        normalizeProjectionPanel();
+      };
+      window.__stockLabProjectionRenderWrapped = true;
+    }
+
+    if (typeof loadProjectionHistoricalChart === "function" && !window.__stockLabProjectionHistoryWrapped) {
+      const originalLoadProjectionHistoricalChart = loadProjectionHistoricalChart;
+      window.loadProjectionHistoricalChart = async function patchedLoadProjectionHistoricalChart(symbol, range) {
+        const history = await originalLoadProjectionHistoricalChart(symbol, range);
+        appState.__projectionUnifiedHistory = history;
+        if (appState.lastProjection && String(history?.symbol || "").toUpperCase() === appState.lastProjection.input.ticker) {
+          drawUnifiedProjectionChart(appState.lastProjection, history);
+        }
+        normalizeProjectionPanel();
+        return history;
+      };
+      window.__stockLabProjectionHistoryWrapped = true;
+    }
+  }
+
+  function bindPortfolioProjectionButton() {
+    const button = byId("runPortfolioProjection");
+    if (button && !button.dataset.runtimePatchBound) {
+      button.dataset.runtimePatchBound = "true";
+      button.addEventListener("click", runPortfolioProjectionPatch);
+    }
+  }
+
+  function bootstrapPatches() {
+    installCssPatch();
+    installCompareCleanup();
+    installProjectionCleanup();
+    ensureToolbarIsFlat();
+    patchImportAndDriveFlows();
+    wrapPortfolioRender();
+    wrapProjectionRender();
+    bindPortfolioProjectionButton();
+    renderPortfolioEnhancements();
+    normalizeProjectionPanel();
+  }
+
+  bootstrapPatches();
+  setTimeout(bootstrapPatches, 0);
 })();
