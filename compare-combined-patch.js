@@ -39,11 +39,11 @@
     const chartCopy = document.querySelector("#compareHistoricalBlock .small-muted");
 
     if (title) title.textContent = "Comparison Scoreboard";
-    if (copy) copy.textContent = "Historical price action and forward projections now live on one timeline.";
-    if (chartTitle) chartTitle.textContent = "Combined Price Path";
+    if (copy) copy.textContent = "Historical prices and forward projections now live on one timeline.";
+    if (chartTitle) chartTitle.textContent = "Price Path";
     if (chartCopy) {
       chartCopy.textContent =
-        "Each stock shows normalized history first, then its forward projection continues from the latest point.";
+        "Each stock shows actual price history first, then its dashed forward projection continues from the latest point.";
     }
 
     ensureCompareMeasureMode();
@@ -64,19 +64,18 @@
     if (!histories.length || typeof createLineChart !== "function") return;
 
     const datasets = histories.flatMap(({ color, history, projection }) => {
-      const firstClose = history.points.find((point) => Number.isFinite(point.close))?.close || 1;
       const historySeries = history.points.map((point) => ({
         x: toTimestamp(point.date),
-        y: (point.close / firstClose) * 100,
+        y: Number(point.close) || 0,
       }));
       const anchor = historySeries[historySeries.length - 1];
-      const anchorPrice = Number(projection.currentPrice) || 0;
+      const anchorPrice = Number.isFinite(anchor?.y) ? anchor.y : Number(projection.currentPrice) || 0;
       const projectionSeries = anchor && anchorPrice > 0
         ? [
-            { x: anchor.x, y: anchor.y },
+            { x: anchor.x, y: anchorPrice },
             ...projection.yearly.slice(1).map((point) => ({
               x: addYearsToDate(anchor.x, point.year),
-              y: anchor.y * (point.price / anchorPrice),
+              y: Number(point.price) || 0,
             })),
           ]
         : [];
@@ -97,7 +96,7 @@
           backgroundColor: `${color}1f`,
           borderDash: [8, 5],
           data: projectionSeries,
-          pointRadius: 0,
+          pointRadius: 2,
           pointHitRadius: 18,
           pointHoverRadius: 5,
           borderWidth: 2.8,
@@ -126,14 +125,14 @@
       };
       chart.options.scales.y.ticks.callback = (value) => `${Number(value).toFixed(0)}`;
       chart.options.plugins.tooltip.callbacks.label = (context) =>
-        `${context.dataset.label}: ${context.parsed.y.toFixed(1)} indexed`;
+        `${context.dataset.label}: ${formatDollarValue(context.parsed.y)}`;
       chart.update("none");
     }
 
     ensureCompareMeasureMode();
     setChartReadout(
       "compareHistoricalReadout",
-      `${historical.a.symbol} and ${historical.b.symbol} now share one chart: normalized ${historical.a.rangeLabel} history followed by forward projection paths.`,
+      `${historical.a.symbol} and ${historical.b.symbol} now share one chart: ${historical.a.rangeLabel} price history followed by dashed forward projection paths.`,
     );
   }
 
@@ -272,13 +271,6 @@
       },
       true,
     );
-  }
-
-  function fillCompareInputs(slot, data) {
-    if (byId(`compare${slot}Ticker`) && data?.symbol) byId(`compare${slot}Ticker`).value = data.symbol;
-    if (Number.isFinite(data?.price) && byId(`compare${slot}Price`)) byId(`compare${slot}Price`).value = data.price.toFixed(2);
-    if (Number.isFinite(data?.eps) && byId(`compare${slot}Eps`)) byId(`compare${slot}Eps`).value = data.eps.toFixed(2);
-    if (Number.isFinite(data?.peTtm) && byId(`compare${slot}Pe`)) byId(`compare${slot}Pe`).value = data.peTtm.toFixed(1);
   }
 
   function wireCompareActions() {
