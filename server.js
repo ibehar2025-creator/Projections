@@ -47,6 +47,26 @@ const symbolAliases = new Map([
   ["APPL", "AAPL"],
 ]);
 
+function securityHeaders() {
+  return {
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Content-Security-Policy":
+      "default-src 'self'; " +
+      "base-uri 'self'; " +
+      "object-src 'none'; " +
+      "frame-ancestors 'none'; " +
+      "form-action 'self'; " +
+      "img-src 'self' data: https:; " +
+      "font-src 'self' https://fonts.gstatic.com data:; " +
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; " +
+      "connect-src 'self';",
+  };
+}
+
 function cleanSymbol(symbol) {
   const cleaned = String(symbol || "")
     .trim()
@@ -79,6 +99,7 @@ function sendJson(res, status, data, extraHeaders = {}) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
+    ...securityHeaders(),
     ...extraHeaders,
   });
   res.end(JSON.stringify(data));
@@ -88,6 +109,7 @@ function redirect(res, location, headers = {}) {
   res.writeHead(302, {
     Location: location,
     "Cache-Control": "no-store",
+    ...securityHeaders(),
     ...headers,
   });
   res.end();
@@ -934,11 +956,25 @@ async function serveStatic(res, pathname) {
     res.writeHead(200, {
       "Content-Type": mimeTypes[ext] || "application/octet-stream",
       "Cache-Control": "no-cache",
+      ...securityHeaders(),
     });
     res.end(file);
   } catch {
+    if (path.extname(normalized)) {
+      res.writeHead(404, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+        ...securityHeaders(),
+      });
+      res.end("Not Found");
+      return;
+    }
     const fallback = await readFile(path.join(__dirname, "index.html"));
-    res.writeHead(200, { "Content-Type": mimeTypes[".html"] });
+    res.writeHead(200, {
+      "Content-Type": mimeTypes[".html"],
+      "Cache-Control": "no-cache",
+      ...securityHeaders(),
+    });
     res.end(fallback);
   }
 }
