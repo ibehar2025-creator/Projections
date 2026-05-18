@@ -6,6 +6,15 @@
     return document.getElementById(id);
   }
 
+  function escapeText(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   function hasExampleTickerText(node) {
     return Boolean(node && /AAPL|MSFT|Apple|Microsoft/i.test(node.textContent || ""));
   }
@@ -324,7 +333,7 @@
           }
           const card = byId("stockDataCard");
           if (card) {
-            card.innerHTML = `<strong>Could not load data.</strong><p>${error.message || "Request failed."}</p>`;
+            card.innerHTML = `<strong>Could not load data.</strong><p>${escapeText(error.message || "Request failed.")}</p>`;
           }
         } finally {
           button.disabled = false;
