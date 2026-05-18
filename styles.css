@@ -311,6 +311,18 @@ h3 {
   gap: 12px;
 }
 
+.section-heading {
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.results-panel > .section-heading .small-muted {
+  display: block;
+  max-width: 24ch;
+  text-align: right;
+  line-height: 1.45;
+}
+
 .chart-header,
 .portfolio-header,
 .watchlist-header {
@@ -358,6 +370,10 @@ two-col,
 
 .details-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.results-panel .details-grid {
+  margin-top: 12px;
 }
 
 .chart-stack,
@@ -1059,6 +1075,11 @@ textarea:focus {
   .chart-grid-two,
   .tools-grid {
     grid-template-columns: 1fr;
+  }
+
+  .results-panel > .section-heading .small-muted {
+    max-width: none;
+    text-align: left;
   }
 
   .heading-actions,
