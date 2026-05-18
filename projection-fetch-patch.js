@@ -19,6 +19,93 @@
     if (readout) readout.textContent = message;
   }
 
+  const calculatorMoney = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  const calculatorPercent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
+  const calculatorWhole = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+  const calculatorOneDecimal = new Intl.NumberFormat("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+  function numberValue(id) {
+    return Number(byId(id)?.value) || 0;
+  }
+
+  function classForValueSafe(value) {
+    if (!Number.isFinite(value) || value === 0) return "";
+    return value > 0 ? "value-positive" : "value-negative";
+  }
+
+  function runReverseCalculator() {
+    const price = numberValue("revPrice");
+    const eps = numberValue("revEps");
+    const exitPe = numberValue("revPe");
+    const years = Math.max(1, numberValue("revYears"));
+    const answer = byId("reverseAnswer");
+    if (!answer) return null;
+
+    if (price <= 0 || eps <= 0 || exitPe <= 0) {
+      answer.innerHTML = "<strong>Enter a positive price, EPS, and exit P/E.</strong>";
+      return null;
+    }
+
+    const targetEps = price / exitPe;
+    const impliedGrowth = Math.pow(targetEps / eps, 1 / years) - 1;
+    const terminalEps = eps * Math.pow(1 + impliedGrowth, years);
+    answer.innerHTML = `
+      <strong>${calculatorPercent.format(impliedGrowth)} implied annual EPS growth</strong>
+      <p>Current price implies ${calculatorMoney.format(terminalEps)} terminal EPS in ${calculatorWhole.format(years)} years at ${calculatorOneDecimal.format(exitPe)}x earnings.</p>
+    `;
+    return { impliedGrowth, terminalEps };
+  }
+
+  function runMosCalculator() {
+    const fairValue = numberValue("fairValue");
+    const currentPrice = numberValue("mosPrice");
+    const requiredSafety = Math.max(0, numberValue("mosPercent")) / 100;
+    const answer = byId("mosAnswer");
+    if (!answer) return null;
+
+    if (fairValue <= 0 || currentPrice <= 0) {
+      answer.innerHTML = "<strong>Enter a positive fair value and current price.</strong>";
+      return null;
+    }
+
+    const margin = (fairValue - currentPrice) / fairValue;
+    const buyBelow = fairValue * (1 - requiredSafety);
+    const clearsBar = currentPrice <= buyBelow;
+    answer.innerHTML = `
+      <strong class="${classForValueSafe(margin)}">${calculatorPercent.format(margin)} margin of safety</strong>
+      <p>${clearsBar ? "Clears" : "Does not clear"} your required discount. Buy-below price: ${calculatorMoney.format(buyBelow)}.</p>
+    `;
+    return { margin, buyBelow, clearsBar };
+  }
+
+  function bindCalculatorButtons() {
+    [
+      ["runReverse", runReverseCalculator],
+      ["runMos", runMosCalculator],
+    ].forEach(([id, handler]) => {
+      const button = byId(id);
+      if (!button || button.dataset.calculatorPatchBound === "true") return;
+      button.dataset.calculatorPatchBound = "true";
+      button.type = "button";
+      button.addEventListener(
+        "click",
+        (event) => {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          handler();
+        },
+        true,
+      );
+    });
+
+    if (byId("reverseAnswer") && !byId("reverseAnswer").textContent.trim()) {
+      runReverseCalculator();
+    }
+    if (byId("mosAnswer") && !byId("mosAnswer").textContent.trim()) {
+      runMosCalculator();
+    }
+  }
+
   function addYearsToDate(baseValue, years) {
     const date = new Date(baseValue);
     const copy = new Date(date.getTime());
@@ -250,6 +337,7 @@
   function bootstrapProjectionPatch() {
     installProjectionHistoryFallback();
     clearExampleTickerUi();
+    bindCalculatorButtons();
     bindProjectionRun();
     bindProjectionFetch();
   }
