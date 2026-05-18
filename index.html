@@ -255,10 +255,8 @@
                 <button class="segmented-button" type="button" data-compare-view="forward">Forward Projection</button>
               </div>
             </div>
-          </div>
 
-          <div class="chart-stack">
-            <article class="chart-card compare-mode-block active" id="compareHistoricalBlock">
+            <article class="chart-card compare-mode-block active compare-chart-card" id="compareHistoricalBlock">
               <div class="chart-header">
                 <div>
                   <h2>Historical Performance</h2>
@@ -283,7 +281,9 @@
               </div>
               <div class="chart-readout" id="compareHistoricalReadout">Historical comparison details will appear here.</div>
             </article>
+          </div>
 
+          <div class="chart-stack">
             <article class="chart-card compare-mode-block" id="compareForwardBlock">
               <div class="chart-header">
                 <div>
@@ -482,7 +482,7 @@
       })();
     </script>
     <script src="projection-chart-patch.js?v=3"></script>
-    <script src="compare-combined-patch.js?v=2"></script>
+    <script src="compare-combined-patch.js?v=3"></script>
     <script src="projection-fetch-patch.js?v=1"></script>
   </body>
 </html>
