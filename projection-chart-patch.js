@@ -829,7 +829,11 @@
   let lastCompareFetchKey = "";
 
   async function autoFetchCompare(reason = "auto") {
-    if (!compareTickersReady() || typeof fetchCompareTickers !== "function") return;
+    const fetchRunner =
+      window.__compareFetchRunner ||
+      window.fetchCompareTickers ||
+      (typeof fetchCompareTickers === "function" ? fetchCompareTickers : null);
+    if (!compareTickersReady() || typeof fetchRunner !== "function") return;
     const key = [
       document.getElementById("compareATicker")?.value?.trim()?.toUpperCase(),
       document.getElementById("compareBTicker")?.value?.trim()?.toUpperCase(),
@@ -841,7 +845,7 @@
 
     compareFetchInFlight = true;
     try {
-      await fetchCompareTickers();
+      await fetchRunner();
       lastCompareFetchKey = key;
     } finally {
       compareFetchInFlight = false;
@@ -869,6 +873,7 @@
     const input = document.getElementById(id);
     if (!input || input.dataset.compareAutoFetchBound) return;
     input.dataset.compareAutoFetchBound = "true";
+    input.addEventListener("input", queueCompareFetch);
     input.addEventListener("change", queueCompareFetch);
     input.addEventListener("blur", queueCompareFetch);
     input.addEventListener("keydown", (event) => {
@@ -1049,6 +1054,7 @@
         throw error;
       }
     };
+    window.__compareFetchRunner = safeCompareFetch;
     fetchCompareTickers = safeCompareFetch;
     window.fetchCompareTickers = safeCompareFetch;
   }
