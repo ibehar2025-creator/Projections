@@ -199,7 +199,8 @@
       const current = String(input.value || "").trim().toUpperCase();
       const attrValue = String(input.getAttribute("value") || "").trim().toUpperCase();
       const attrPlaceholder = String(input.getAttribute("placeholder") || "").trim().toUpperCase();
-      if (["AAPL", "MSFT"].includes(current) || ["AAPL", "MSFT"].includes(attrValue)) {
+      const isExampleDefault = ["AAPL", "MSFT"].includes(attrValue) && current === attrValue;
+      if (isExampleDefault) {
         input.value = "";
         input.defaultValue = "";
         input.removeAttribute("value");
@@ -344,7 +345,4 @@
 
   bootstrapProjectionPatch();
   setTimeout(bootstrapProjectionPatch, 0);
-  setTimeout(bootstrapProjectionPatch, 500);
-  setTimeout(bootstrapProjectionPatch, 1500);
-  setTimeout(bootstrapProjectionPatch, 3000);
 })();
