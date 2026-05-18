@@ -75,14 +75,13 @@ const requiredHoldingColumns = [
 const appState = {
   lastProjection: null,
   lastStockData: null,
-  lastProjectionFetchSymbol: "",
-  projectionFetchInFlight: "",
   projectionHistory: null,
   projectionHistoryRange: "5y",
   compareHistoryRange: "5y",
   compareView: "historical",
   watchlist: [],
   compareHistorical: null,
+  portfolioProjection: null,
   portfolio: loadPortfolioState(),
   portfolioRemoteConflict: null,
   driveAuth: {
@@ -109,22 +108,51 @@ const measurePlugin = {
     const left = xScale.getPixelForValue(interaction.measureStart.xValue);
     const right = xScale.getPixelForValue(interaction.measureEnd.xValue);
     const activeDataset = chart.data.datasets[interaction.measureDatasetIndex] || chart.data.datasets[0];
-    const topValue = Math.max(interaction.measureStart.yValue, interaction.measureEnd.yValue);
-    const topPixel = yScale ? yScale.getPixelForValue(topValue) : area.top;
     const minX = Math.min(left, right);
-    const width = Math.abs(right - left);
     const fill = activeDataset?.borderColor || "#4f8cff";
+    const baseline = area.bottom;
+    const datasetPoints = Array.isArray(activeDataset?.data) ? activeDataset.data : [];
+    const startIndex = Number.isInteger(interaction.measureStart.index) ? interaction.measureStart.index : 0;
+    const endIndex = Number.isInteger(interaction.measureEnd.index) ? interaction.measureEnd.index : datasetPoints.length - 1;
+    const fromIndex = Math.max(0, Math.min(startIndex, endIndex));
+    const toIndex = Math.min(datasetPoints.length - 1, Math.max(startIndex, endIndex));
+    const selectedPoints = datasetPoints.slice(fromIndex, toIndex + 1);
+    const topValue = Math.max(...selectedPoints.map((point) => point?.y ?? 0), interaction.measureStart.yValue, interaction.measureEnd.yValue);
+    const topPixel = yScale ? yScale.getPixelForValue(topValue) : area.top;
 
     ctx.save();
-    ctx.fillStyle = "rgba(79, 140, 255, 0.12)";
+    ctx.fillStyle = "rgba(79, 140, 255, 0.14)";
     ctx.strokeStyle = fill;
     ctx.lineWidth = 1.2;
-    ctx.fillRect(minX, area.top, width, area.bottom - area.top);
+
+    if (selectedPoints.length >= 2 && yScale) {
+      ctx.beginPath();
+      ctx.moveTo(xScale.getPixelForValue(selectedPoints[0].x), baseline);
+      selectedPoints.forEach((point) => {
+        ctx.lineTo(xScale.getPixelForValue(point.x), yScale.getPixelForValue(point.y));
+      });
+      ctx.lineTo(xScale.getPixelForValue(selectedPoints[selectedPoints.length - 1].x), baseline);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.beginPath();
+      selectedPoints.forEach((point, index) => {
+        const px = xScale.getPixelForValue(point.x);
+        const py = yScale.getPixelForValue(point.y);
+        if (index === 0) {
+          ctx.moveTo(px, py);
+        } else {
+          ctx.lineTo(px, py);
+        }
+      });
+      ctx.stroke();
+    }
+
     ctx.beginPath();
-    ctx.moveTo(left, area.top);
-    ctx.lineTo(left, area.bottom);
-    ctx.moveTo(right, area.top);
-    ctx.lineTo(right, area.bottom);
+    ctx.moveTo(left, topPixel);
+    ctx.lineTo(left, baseline);
+    ctx.moveTo(right, topPixel);
+    ctx.lineTo(right, baseline);
     ctx.stroke();
     ctx.fillStyle = "rgba(12, 18, 28, 0.95)";
     ctx.strokeStyle = fill;
@@ -151,13 +179,6 @@ if (window.Chart) {
 
 function el(id) {
   return document.getElementById(id);
-}
-
-function on(id, eventName, handler, options) {
-  const node = el(id);
-  if (!node) return false;
-  node.addEventListener(eventName, handler, options);
-  return true;
 }
 
 function roundRect(ctx, x, y, width, height, radius, fill, stroke) {
@@ -342,19 +363,29 @@ async function fetchHistoricalData(symbol, range = "5y") {
 
 function portfolioPayloadFromState() {
   ensurePortfolioDeviceId();
+  const holdingsSnapshot = appState.portfolio.trades.length
+    ? deriveHoldingsFromTrades(appState.portfolio.trades, false)
+    : (appState.portfolio.holdings || []).map(normalizePortfolioHolding);
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     updatedAt: new Date().toISOString(),
     deviceId: appState.portfolio.sync.deviceId,
     trades: appState.portfolio.trades.map((trade) => ({ ...trade })),
-    holdingsSnapshot: deriveHoldingsFromTrades(appState.portfolio.trades, false),
+    holdingsSnapshot,
   };
 }
 
 function applyDrivePortfolioPayload(payload, metadata = {}) {
   const trades = Array.isArray(payload?.trades) ? payload.trades.map(normalizeImportedTrade) : [];
+  const remoteHoldingsSource = Array.isArray(payload?.holdingsSnapshot)
+    ? payload.holdingsSnapshot
+    : Array.isArray(payload?.holdings)
+      ? payload.holdings
+      : [];
+  const remoteHoldings = remoteHoldingsSource.map(normalizePortfolioHolding).filter((holding) => holding.symbol && holding.quantity > 0);
   appState.portfolio.trades = trades;
-  appState.portfolio.holdings = deriveHoldingsFromTrades(trades, false);
+  appState.portfolio.holdings = trades.length ? deriveHoldingsFromTrades(trades, false) : remoteHoldings;
+  appState.portfolioProjection = null;
   appState.portfolio.sync = {
     ...appState.portfolio.sync,
     remoteFileId: metadata.fileId || appState.portfolio.sync.remoteFileId || null,
@@ -662,300 +693,81 @@ function applyStockDataToProjection(data) {
     const margin = Math.max(0, Number(data.netMargin));
     el("bearMargin").value = Math.max(1, margin * 0.7).toFixed(1);
     el("baseMargin").value = margin.toFixed(1);
-    el("bullMargin").value = Math.min(60, margin * 1.2).toFixed(1);
+    el("bullMargin").value = Math.max(margin * 1.15, margin + 2).toFixed(1);
+  }
+  if (Number.isFinite(data.peTtm)) {
+    const pe = Math.max(5, Number(data.peTtm));
+    el("bearPe").value = Math.max(8, pe * 0.75).toFixed(1);
+    el("basePe").value = pe.toFixed(1);
+    el("bullPe").value = Math.max(pe * 1.15, pe + 3).toFixed(1);
   }
   renderStockDataCard(data);
-  runProjection();
+  setDataStatus(`${data.source || "Market"} data loaded`);
 }
 
 async function fetchProjectionTicker() {
-  const ticker = el("ticker").value.trim().toUpperCase();
-  if (!ticker) {
-    setDataStatus("Enter a ticker to load market data.");
-    return;
-  }
-  if (ticker === appState.projectionFetchInFlight || ticker === appState.lastProjectionFetchSymbol) {
-    return;
-  }
-  el("ticker").value = ticker;
-  appState.projectionFetchInFlight = ticker;
-  setDataStatus(`Fetching ${ticker.toUpperCase()}...`);
+  const button = el("fetchTicker");
+  button.disabled = true;
+  button.textContent = "Fetching...";
+  setDataStatus("Fetching live data");
   try {
-    const data = await fetchStockData(ticker);
+    const data = await fetchStockData(el("ticker").value);
     applyStockDataToProjection(data);
-    appState.lastProjectionFetchSymbol = data.symbol;
-    setDataStatus(`${data.symbol} market data refreshed.`);
+    runProjection();
     await loadProjectionHistoricalChart(data.symbol, appState.projectionHistoryRange);
   } catch (error) {
-    appState.lastProjectionFetchSymbol = "";
-    setDataStatus(error.message);
+    setDataStatus("Data unavailable");
     el("stockDataCard").innerHTML = `<strong>Could not load data.</strong><p>${error.message}</p>`;
   } finally {
-    appState.projectionFetchInFlight = "";
+    button.disabled = false;
+    button.textContent = "Fetch live data";
   }
 }
 
-function normalizeProjectionTicker() {
-  const tickerField = el("ticker");
-  if (!tickerField) return "";
-  const normalizedTicker = tickerField.value.trim().toUpperCase().replace(/[^A-Z.\-]/g, "");
-  tickerField.value = normalizedTicker;
-  if (!normalizedTicker) {
-    appState.lastProjectionFetchSymbol = "";
-    return "";
-  }
-  return normalizedTicker;
-}
-
-function triggerProjectionTickerFetch() {
-  const normalizedTicker = normalizeProjectionTicker();
-  if (!normalizedTicker || normalizedTicker === appState.lastProjectionFetchSymbol) {
-    return;
-  }
-  fetchProjectionTicker().catch((error) => {
-    setDataStatus(error.message || "Could not load market data.");
-  });
-}
-
-function compareInput(prefix) {
-  return {
-    ticker: el(`${prefix}Ticker`).value.trim().toUpperCase() || prefix,
-    price: Number(el(`${prefix}Price`).value) || 0,
-    eps: Number(el(`${prefix}Eps`).value) || 0,
-    growth: (Number(el(`${prefix}Growth`).value) || 0) / 100,
-    pe: Number(el(`${prefix}Pe`).value) || 0,
-  };
-}
-
-function calculateCompareStock(stock, years) {
-  const futureEps = stock.eps * Math.pow(1 + stock.growth, years);
-  const futurePrice = futureEps * stock.pe;
-  const upside = stock.price > 0 ? futurePrice / stock.price - 1 : 0;
-  const cagr = stock.price > 0 && futurePrice > 0 ? Math.pow(futurePrice / stock.price, 1 / years) - 1 : 0;
-  const yearly = [];
-  for (let year = 0; year <= years; year += 1) {
-    const eps = stock.eps * Math.pow(1 + stock.growth, year);
-    yearly.push({
-      x: year,
-      y: eps * stock.pe,
-      year,
-      eps,
-      price: eps * stock.pe,
-    });
-  }
-  return { ...stock, yearly, futurePrice, upside, cagr };
-}
-
-function renderCompareCards(stocks) {
-  el("compareCards").innerHTML = stocks
-    .map(
-      (stock) => `
-        <article class="metric-card">
-          <span>${stock.ticker}</span>
-          <strong>${formatDollarValue(stock.futurePrice)}</strong>
-          <p>${formatPercent(stock.cagr)} expected CAGR, ${formatPercent(stock.upside)} upside</p>
-        </article>
-      `,
-    )
-    .join("");
-}
-
-function runCompare() {
-  const years = Math.max(1, Math.min(15, Number(el("compareYears").value) || 1));
-  const a = calculateCompareStock(compareInput("compareA"), years);
-  const b = calculateCompareStock(compareInput("compareB"), years);
-  renderCompareCards([a, b]);
-  drawCompareForwardChart(a, b, years);
-  return { a, b, years };
-}
-
-async function fetchCompareTickers() {
-  const aTicker = el("compareATicker").value.trim();
-  const bTicker = el("compareBTicker").value.trim();
-  if (!aTicker || !bTicker) return;
-
-  try {
-    const [aData, bData] = await Promise.all([fetchStockData(aTicker), fetchStockData(bTicker)]);
-    el("compareAPrice").value = Number(aData.price || 0).toFixed(2);
-    el("compareAEps").value = Number(aData.eps || 0).toFixed(2);
-    el("compareBPrice").value = Number(bData.price || 0).toFixed(2);
-    el("compareBEps").value = Number(bData.eps || 0).toFixed(2);
-    runCompare();
-  } catch (error) {
-    setInlineStatus("watchlistStatus", error.message, "negative");
-  }
-}
-
-function saveProjection() {
-  if (!appState.lastProjection) {
-    runProjection();
-  }
-
-  const result = appState.lastProjection;
-  const existingIndex = appState.watchlist.findIndex((item) => item.ticker === result.input.ticker);
-  const payload = {
-    ticker: result.input.ticker,
-    inputs: structuredClone(result.input),
-    notes: existingIndex >= 0 ? appState.watchlist[existingIndex].notes || "" : "",
-    savedAt: new Date().toISOString(),
-  };
-
-  if (existingIndex >= 0) {
-    appState.watchlist.splice(existingIndex, 1, payload);
-  } else {
-    appState.watchlist.unshift(payload);
-  }
-
-  persistWatchlist();
-  renderWatchlist();
-  setInlineStatus("projectionSaveStatus", `${payload.ticker} saved to watchlist.`, "positive");
-}
-
-function restoreProjectionInputs(input) {
-  [
-    "ticker",
-    "currentPrice",
-    "revenue",
-    "shares",
-    "eps",
-    "years",
-  ].forEach((key) => {
-    if (key in input) {
-      el(key).value = input[key];
-    }
-  });
-
-  scenarioConfig.forEach((scenario) => {
-    const assumptions = input.cases[scenario.key];
-    if (!assumptions) return;
-    el(`${scenario.key}Growth`).value = assumptions.growth * 100;
-    el(`${scenario.key}Margin`).value = assumptions.margin * 100;
-    el(`${scenario.key}Pe`).value = assumptions.pe;
-  });
-}
-
-function renderWatchlist() {
-  if (!appState.watchlist.length) {
-    el("watchlistGrid").innerHTML = `<article class="empty-card"><strong>No saved ideas yet.</strong><p>Save a projection to build a personal research queue.</p></article>`;
-    return;
-  }
-
-  el("watchlistGrid").innerHTML = appState.watchlist
-    .map(
-      (item, index) => `
-        <article class="watch-card">
-          <div class="watch-card-header">
-            <div>
-              <h3>${item.ticker}</h3>
-              <span class="small-muted">Saved ${formatDate(item.savedAt)}</span>
-            </div>
-            <div class="watch-actions">
-              <button class="secondary-button" type="button" data-watch-action="load" data-watch-index="${index}">Load</button>
-              <button class="ghost-button" type="button" data-watch-action="delete" data-watch-index="${index}">Remove</button>
-            </div>
-          </div>
-          <label class="wide-field">
-            Notes
-            <textarea data-watch-note="${index}" rows="4" placeholder="What needs to happen for this thesis to work?">${escapeHtml(item.notes || "")}</textarea>
-          </label>
-        </article>
-      `,
-    )
-    .join("");
-}
-
-function toggleCompareView(view) {
-  appState.compareView = view;
-  document.querySelectorAll("[data-compare-view]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.compareView === view);
-  });
-  el("compareHistoricalBlock").classList.toggle("active", view === "historical");
-  el("compareForwardBlock").classList.toggle("active", view === "forward");
-  resizeVisibleCharts();
-}
-
-function destroyChart(key) {
-  const current = chartRegistry[key];
-  if (current) {
-    current.destroy();
-    delete chartRegistry[key];
-  }
-}
-
-function chartReadoutForPoints(points, indexA, indexB, xFormatter = (value) => value) {
-  const a = points[indexA];
-  const b = points[indexB];
-  if (!a || !b) return "";
-  const start = a.y;
-  const end = b.y;
-  const move = end - start;
-  const pctMove = start ? move / start : 0;
-  return `${xFormatter(a.x)} to ${xFormatter(b.x)}: ${formatDollarValue(start)} to ${formatDollarValue(end)} (${formatDollarValue(move)}, ${formatPercent(pctMove)}).`;
-}
-
-function setChartReadout(id, message) {
-  const node = el(id);
-  if (node) {
-    node.textContent = message;
-  }
-}
-
-function lineChartInteraction(chart, readoutId, points, xFormatter = (value) => value) {
-  let selected = null;
-  const state = {
-    points,
-    chart,
-    readoutId,
-    xFormatter,
-  };
-
-  const updateMeasureOverlay = (firstIndex, secondIndex) => {
-    const start = points[firstIndex];
-    const end = points[secondIndex];
-    if (!start || !end) return;
-    chart.$interaction = {
-      measureStart: { xValue: start.x, yValue: start.y },
-      measureEnd: { xValue: end.x, yValue: end.y },
-      measureDatasetIndex: 0,
-      measureLabel: chartReadoutForPoints(points, firstIndex, secondIndex, xFormatter),
-    };
-    setChartReadout(readoutId, chart.$interaction.measureLabel);
-    chart.update("none");
-  };
-
-  const clearOverlay = () => {
-    chart.$interaction = null;
-    chart.update("none");
-  };
-
-  chart.canvas.onclick = (event) => {
-    const elements = chart.getElementsAtEventForMode(event, "nearest", { intersect: false }, true);
-    if (!elements.length) return;
-    const index = elements[0].index;
-    if (selected === null) {
-      selected = index;
-      setChartReadout(readoutId, `${xFormatter(points[index].x)} selected. Click another point to measure move.`);
-      return;
-    }
-    updateMeasureOverlay(selected, index);
-    selected = null;
-  };
-
-  state.reset = () => {
-    selected = null;
-    clearOverlay();
-  };
-
-  return state;
-}
-
-function baseLineOptions(readoutId) {
+function buildBaseChartOptions({ yAxisLabelPrefix = "", readoutId, xTime = false, mode = "measure" }) {
   return {
     responsive: true,
     maintainAspectRatio: false,
     interaction: {
       mode: "nearest",
       intersect: false,
+    },
+    scales: {
+      x: xTime
+        ? {
+            type: "time",
+            time: {
+              tooltipFormat: "MMM d, yyyy",
+            },
+            ticks: {
+              color: "#92a8c5",
+              maxRotation: 0,
+            },
+            grid: {
+              color: "rgba(36, 52, 75, 0.55)",
+            },
+          }
+        : {
+            type: "linear",
+            ticks: {
+              color: "#92a8c5",
+              precision: 0,
+            },
+            grid: {
+              color: "rgba(36, 52, 75, 0.55)",
+            },
+          },
+      y: {
+        ticks: {
+          color: "#92a8c5",
+          callback(value) {
+            return `${yAxisLabelPrefix}${Number(value).toLocaleString()}`;
+          },
+        },
+        grid: {
+          color: "rgba(36, 52, 75, 0.55)",
+        },
+      },
     },
     plugins: {
       legend: {
@@ -964,549 +776,592 @@ function baseLineOptions(readoutId) {
         },
       },
       tooltip: {
-        backgroundColor: "rgba(8, 12, 18, 0.95)",
-        titleColor: "#f5f7fb",
-        bodyColor: "#dce9ff",
-        borderColor: "rgba(79, 140, 255, 0.4)",
-        borderWidth: 1,
         callbacks: {
           label(context) {
+            const label = context.dataset.label ? `${context.dataset.label}: ` : "";
             const value = context.parsed.y;
-            return `${context.dataset.label}: ${formatDollarValue(value)}`;
+            return `${label}${formatDollarValue(value)}`;
           },
         },
       },
       zoom: {
-        limits: {
-          x: { min: "original", max: "original" },
-          y: { min: "original", max: "original" },
-        },
         pan: {
-          enabled: true,
-          mode: "xy",
-          modifierKey: "shift",
+          enabled: mode === "pan",
+          mode: "x",
         },
         zoom: {
           wheel: {
-            enabled: true,
+            enabled: mode === "pan",
           },
           pinch: {
-            enabled: true,
+            enabled: mode === "pan",
           },
           drag: {
-            enabled: true,
-            borderColor: "rgba(79, 140, 255, 0.8)",
-            borderWidth: 1,
-            backgroundColor: "rgba(79, 140, 255, 0.12)",
+            enabled: false,
           },
-          mode: "xy",
+          mode: "x",
         },
       },
     },
-    scales: {
-      x: {
-        grid: {
-          color: "rgba(120, 147, 188, 0.12)",
-        },
-        ticks: {
-          color: "#8fa7c8",
-        },
+    elements: {
+      point: {
+        radius: 0,
+        hitRadius: 18,
+        hoverRadius: 4,
       },
-      y: {
-        grid: {
-          color: "rgba(120, 147, 188, 0.12)",
-        },
-        ticks: {
-          color: "#8fa7c8",
-          callback(value) {
-            return formatDollarValue(value);
-          },
-        },
+      line: {
+        tension: 0.2,
       },
     },
-    onResize() {
-      const node = el(readoutId);
-      if (node && !node.textContent.trim()) {
-        node.textContent = "Chart details will appear here.";
-      }
+    onClick(event, elements, chart) {
+      if (!elements.length) return;
+      const first = elements[0];
+      const point = chart.data.datasets[first.datasetIndex].data[first.index];
+      const xText = xTime ? formatDate(point.x) : `Year ${point.x}`;
+      setChartReadout(readoutId, `${chart.data.datasets[first.datasetIndex].label}: ${xText} | ${formatDollarValue(point.y)}`);
     },
   };
 }
 
-function createLineChart(key, canvasId, { datasets, readoutId, xFormatter = (value) => value, xTime = false }) {
-  destroyChart(key);
-  const canvas = el(canvasId);
-  if (!canvas) return null;
+function destroyChart(chartKey) {
+  const existing = appState.charts[chartKey];
+  if (existing?.chart) {
+    existing.chart.destroy();
+  }
+  delete appState.charts[chartKey];
+}
 
-  const chart = new Chart(canvas.getContext("2d"), {
-    type: "line",
-    data: {
-      datasets,
-    },
-    options: {
-      ...baseLineOptions(readoutId),
-      parsing: false,
-      normalized: true,
-      spanGaps: true,
-      animation: false,
-      scales: {
-        ...baseLineOptions(readoutId).scales,
-        x: {
-          ...baseLineOptions(readoutId).scales.x,
-          type: xTime ? "time" : "linear",
-          ticks: {
-            ...baseLineOptions(readoutId).scales.x.ticks,
-            callback(value) {
-              return xTime ? formatDate(value) : value;
-            },
-          },
-        },
-      },
-    },
+function setChartReadout(readoutId, message) {
+  const node = el(readoutId);
+  if (node) node.textContent = message;
+}
+
+function pointDistance(a, b) {
+  return Math.abs(Number(a) - Number(b));
+}
+
+function findNearestDataPoint(chart, event, targetDatasetIndex = null) {
+  const area = chart.chartArea;
+  if (!area) return null;
+
+  const position = Chart.helpers.getRelativePosition(event, chart);
+  if (
+    position.x < area.left ||
+    position.x > area.right ||
+    position.y < area.top ||
+    position.y > area.bottom
+  ) {
+    return null;
+  }
+
+  const xScale = chart.scales.x;
+  const xValue = xScale.getValueForPixel(position.x);
+  let nearest = null;
+
+  chart.data.datasets.forEach((dataset, datasetIndex) => {
+    if (targetDatasetIndex !== null && datasetIndex !== targetDatasetIndex) {
+      return;
+    }
+    dataset.data.forEach((point, index) => {
+      const distance = pointDistance(point.x, xValue);
+      if (!nearest || distance < nearest.distance) {
+        nearest = { dataset, datasetIndex, point, index, distance };
+      }
+    });
   });
 
-  chartRegistry[key] = chart;
-  if (datasets.length && datasets[0].data?.length) {
-    const interaction = lineChartInteraction(chart, readoutId, datasets[0].data, xFormatter);
-    chart.$resetInteraction = interaction.reset;
+  return nearest;
+}
+
+function attachMeasureHandlers(chartKey) {
+  const bundle = appState.charts[chartKey];
+  if (!bundle?.chart) return;
+  const { chart, readoutId, xFormatter } = bundle;
+  const canvas = chart.canvas;
+  if (!canvas) return;
+
+  if (bundle.cleanupMeasure) {
+    bundle.cleanupMeasure();
   }
+
+  let dragging = false;
+
+  const mouseDown = (event) => {
+    event.preventDefault();
+    if (bundle.mode !== "measure") return;
+    const nearest = findNearestDataPoint(chart, event);
+    if (!nearest) return;
+    dragging = true;
+    chart.$interaction = {
+      measureStart: { xValue: nearest.point.x, yValue: nearest.point.y, index: nearest.index },
+      measureEnd: { xValue: nearest.point.x, yValue: nearest.point.y, index: nearest.index },
+      measureDatasetIndex: nearest.datasetIndex,
+      measureLabel: "",
+    };
+    chart.update("none");
+  };
+
+  const mouseMove = (event) => {
+    const nearest = findNearestDataPoint(chart, event);
+    if (nearest && !dragging) {
+      setChartReadout(readoutId, `${nearest.dataset.label}: ${xFormatter(nearest.point.x)} | ${formatDollarValue(nearest.point.y)}`);
+    }
+    if (!dragging || bundle.mode !== "measure") return;
+    const current = findNearestDataPoint(chart, event, chart.$interaction.measureDatasetIndex);
+    if (!current) return;
+    const start = chart.$interaction.measureStart;
+    const delta = current.point.y - start.yValue;
+    const percentChange = start.yValue !== 0 ? delta / start.yValue : 0;
+    chart.$interaction.measureEnd = { xValue: current.point.x, yValue: current.point.y, index: current.index };
+    chart.$interaction.measureDatasetIndex = current.datasetIndex;
+    chart.$interaction.measureLabel = `${xFormatter(start.xValue)} to ${xFormatter(current.point.x)} | Growth ${formatDollarValue(delta)} | ${formatPercent(percentChange)}`;
+    setChartReadout(readoutId, chart.$interaction.measureLabel);
+    chart.update("none");
+  };
+
+  const mouseUp = (event) => {
+    if (dragging && chart.$interaction?.measureLabel) {
+      const current = findNearestDataPoint(chart, event, chart.$interaction.measureDatasetIndex);
+      if (current) {
+        const start = chart.$interaction.measureStart;
+        const delta = current.point.y - start.yValue;
+        const percentChange = start.yValue !== 0 ? delta / start.yValue : 0;
+        chart.$interaction.measureEnd = { xValue: current.point.x, yValue: current.point.y, index: current.index };
+        chart.$interaction.measureDatasetIndex = current.datasetIndex;
+        chart.$interaction.measureLabel = `${xFormatter(start.xValue)} to ${xFormatter(current.point.x)} | Growth ${formatDollarValue(delta)} | ${formatPercent(percentChange)}`;
+        setChartReadout(readoutId, chart.$interaction.measureLabel);
+        chart.update("none");
+      } else {
+        setChartReadout(readoutId, chart.$interaction.measureLabel);
+      }
+    } else {
+      const nearest = findNearestDataPoint(chart, event);
+      if (nearest) {
+        setChartReadout(readoutId, `${nearest.dataset.label}: ${xFormatter(nearest.point.x)} | ${formatDollarValue(nearest.point.y)}`);
+      }
+    }
+    dragging = false;
+  };
+
+  const mouseLeave = () => {
+    dragging = false;
+  };
+
+  const clickHandler = (event) => {
+    const nearest = findNearestDataPoint(chart, event);
+    if (!nearest) return;
+    setChartReadout(readoutId, `${nearest.dataset.label}: ${xFormatter(nearest.point.x)} | ${formatDollarValue(nearest.point.y)}`);
+  };
+
+  canvas.style.cursor = bundle.mode === "pan" ? "grab" : "crosshair";
+  canvas.addEventListener("pointerdown", mouseDown);
+  canvas.addEventListener("pointermove", mouseMove);
+  canvas.addEventListener("pointerup", mouseUp);
+  canvas.addEventListener("pointerleave", mouseLeave);
+  canvas.addEventListener("click", clickHandler);
+
+  bundle.cleanupMeasure = () => {
+    canvas.removeEventListener("pointerdown", mouseDown);
+    canvas.removeEventListener("pointermove", mouseMove);
+    canvas.removeEventListener("pointerup", mouseUp);
+    canvas.removeEventListener("pointerleave", mouseLeave);
+    canvas.removeEventListener("click", clickHandler);
+  };
+}
+
+function createLineChart(chartKey, canvasId, config) {
+  destroyChart(chartKey);
+  const canvas = el(canvasId);
+  if (!canvas) return null;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const options = buildBaseChartOptions(config);
+  const chart = new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: config.datasets,
+    },
+    options,
+  });
+
+  appState.charts[chartKey] = {
+    chart,
+    mode: config.mode || "measure",
+    readoutId: config.readoutId,
+    xFormatter: config.xFormatter,
+    isTimeSeries: config.xTime,
+  };
+  chart.$interaction = null;
+  attachMeasureHandlers(chartKey);
+  requestAnimationFrame(() => {
+    chart.resize();
+    chart.update("none");
+  });
   return chart;
 }
 
+function updateChartMode(chartKey, mode) {
+  const bundle = appState.charts[chartKey];
+  if (!bundle?.chart) return;
+  bundle.mode = mode;
+  bundle.chart.options.plugins.zoom.pan.enabled = mode === "pan";
+  bundle.chart.options.plugins.zoom.zoom.wheel.enabled = mode === "pan";
+  bundle.chart.options.plugins.zoom.zoom.pinch.enabled = mode === "pan";
+  bundle.chart.$interaction = null;
+  attachMeasureHandlers(chartKey);
+  bundle.chart.update("none");
+}
+
+function resetChartView(chartKey) {
+  const bundle = appState.charts[chartKey];
+  if (!bundle?.chart) return;
+  bundle.chart.resetZoom?.();
+  bundle.chart.$interaction = null;
+  bundle.chart.update("none");
+  const fallbackMessages = {
+    projectionHistorical: "Historical details will appear here.",
+    projectionForward: "Future scenario details will appear here.",
+    compareHistorical: "Historical comparison details will appear here.",
+    compareForward: "Forward comparison details will appear here.",
+    sp500Chart: "S&P chart details will appear here.",
+  };
+  if (bundle.readoutId) setChartReadout(bundle.readoutId, fallbackMessages[chartKey] || "Chart details will appear here.");
+}
+
 function drawProjectionForwardChart(result) {
-  const datasets = result.cases.map((item) => ({
-    label: item.label,
-    data: item.yearly.map((point) => ({ x: point.x, y: point.price })),
-    borderColor: item.color,
-    backgroundColor: `${item.color}26`,
+  const datasets = result.cases.map((scenario) => ({
+    label: `${scenario.label} outlook`,
+    data: scenario.yearly.map((point) => ({ x: point.year, y: point.price })),
+    borderColor: scenario.color,
+    borderDash: scenario.key === "base" ? [] : [6, 6],
+    backgroundColor: `${scenario.color}33`,
+    pointRadius: 0,
+    pointHitRadius: 18,
     fill: false,
-    tension: 0.22,
-    borderWidth: item.key === "base" ? 2.8 : 2.2,
-    pointRadius: 2,
-    pointHoverRadius: 4,
-    borderDash: item.key === "base" ? [] : [7, 5],
   }));
 
   createLineChart("projectionForward", "projectionForwardChart", {
     datasets,
     readoutId: "projectionForwardReadout",
     xFormatter: (value) => `Year ${value}`,
+    xTime: false,
+    mode: "measure",
   });
-
-  setChartReadout("projectionForwardReadout", `Base case reaches ${formatDollarValue(result.cases.find((item) => item.key === "base").terminal.price)} in year ${result.input.years}.`);
+  setChartReadout("projectionForwardReadout", "Future scenario details will appear here.");
 }
 
-function drawProjectionUnifiedChart(result, history) {
-  const lastHistoryPoint = history?.points?.[history.points.length - 1];
-  if (!lastHistoryPoint) {
-    drawProjectionForwardChart(result);
+async function loadProjectionHistoricalChart(symbol, range = "5y") {
+  const data = await fetchHistoricalData(symbol, range);
+  appState.projectionHistory = {
+    symbol: data.symbol,
+    range: data.range,
+    points: data.points,
+  };
+
+  if (appState.lastProjection && String(appState.lastProjection.input.ticker).toUpperCase() === String(data.symbol).toUpperCase()) {
+    drawProjectionUnifiedChart(appState.lastProjection, appState.projectionHistory);
     return;
   }
 
-  const anchorDate = lastHistoryPoint.date;
-  const anchorPrice = Number.isFinite(lastHistoryPoint.close) ? lastHistoryPoint.close : result.input.currentPrice;
-
   const datasets = [
     {
-      label: `${history.symbol} history`,
-      data: history.points.map((point) => ({ x: point.date, y: point.close })),
+      label: `${data.symbol} historical`,
+      data: data.points.map((point) => ({ x: point.date, y: point.close })),
       borderColor: "#4f8cff",
-      backgroundColor: "rgba(79, 140, 255, 0.14)",
-      fill: false,
-      tension: 0.18,
+      backgroundColor: "rgba(79, 140, 255, 0.18)",
       pointRadius: 0,
-      pointHoverRadius: 3,
-      borderWidth: 2.6,
-    },
-    ...result.cases.map((item) => ({
-      label: `${item.label} outlook`,
-      data: [
-        { x: anchorDate, y: anchorPrice },
-        ...item.yearly.slice(1).map((point) => ({
-          x: addYearsToDate(anchorDate, point.year),
-          y: point.price,
-        })),
-      ],
-      borderColor: item.color,
-      backgroundColor: `${item.color}26`,
+      pointHitRadius: 18,
       fill: false,
-      tension: 0.22,
-      pointRadius: 2,
-      pointHoverRadius: 4,
-      borderWidth: item.key === "base" ? 2.8 : 2.2,
-      borderDash: item.key === "base" ? [] : [7, 5],
-    })),
+    },
   ];
 
-  createLineChart("projectionForward", "projectionForwardChart", {
+  createLineChart("projectionHistorical", "projectionForwardChart", {
     datasets,
     readoutId: "projectionForwardReadout",
     xFormatter: (value) => formatDate(value),
     xTime: true,
+    mode: "measure",
   });
-
-  setChartReadout("projectionForwardReadout", `${history.symbol} ${history.rangeLabel} history and forward scenarios loaded on one timeline.`);
+  setChartReadout(
+    "projectionForwardReadout",
+    `${data.symbol} ${range.toUpperCase()} history loaded. Click or drag to inspect exact points.`,
+  );
 }
 
-function addYearsToDate(baseValue, years) {
-  const date = new Date(baseValue);
-  const copy = new Date(date.getTime());
-  copy.setFullYear(copy.getFullYear() + years);
-  return copy.getTime();
+function restoreProjectionInputs(inputs) {
+  if (!inputs) return;
+  el("ticker").value = inputs.ticker;
+  el("currentPrice").value = inputs.currentPrice;
+  el("revenue").value = inputs.revenue;
+  el("shares").value = inputs.shares;
+  el("eps").value = inputs.eps;
+  el("years").value = inputs.years;
+  scenarioConfig.forEach((scenario) => {
+    const item = inputs.cases?.[scenario.key];
+    if (!item) return;
+    el(`${scenario.key}Growth`).value = (item.growth * 100).toFixed(1);
+    el(`${scenario.key}Margin`).value = (item.margin * 100).toFixed(1);
+    el(`${scenario.key}Pe`).value = item.pe;
+  });
 }
 
-function normalizeHistoricalPoints(points) {
-  if (!points.length) return [];
-  const base = points[0].close || 1;
-  return points.map((point) => ({
-    x: point.date,
-    y: (point.close / base) * 100,
-  }));
+function saveProjection() {
+  const inputs = readProjectionInputs();
+  const projection = appState.lastProjection || calculateProjection(inputs);
+  const base = projection.cases.find((item) => item.key === "base");
+  const saved = {
+    ticker: inputs.ticker,
+    savedAt: new Date().toISOString(),
+    currentPrice: inputs.currentPrice,
+    targets: Object.fromEntries(projection.cases.map((item) => [item.key, item.terminal.price])),
+    baseCagr: base?.cagr || 0,
+    inputs,
+    notes: "",
+  };
+
+  const existingIndex = appState.watchlist.findIndex((item) => item.ticker === saved.ticker);
+  if (existingIndex >= 0) {
+    appState.watchlist.splice(existingIndex, 1, saved);
+  } else {
+    appState.watchlist.unshift(saved);
+  }
+  persistWatchlist();
+  renderWatchlist();
+  setInlineStatus("projectionSaveStatus", `${saved.ticker} saved to watchlist.`, "positive");
+  setInlineStatus("watchlistStatus", `${saved.ticker} added to the watchlist.`, "positive");
 }
 
-function drawCompareForwardChart(a, b, years) {
+function compareProjectionSeries(symbol, currentPrice, eps, growthPct, exitPe, years) {
+  const growth = Number(growthPct) / 100;
+  const startEps = Number(eps) || 0;
+  const current = Number(currentPrice) || 0;
+  const multiple = Number(exitPe) || 0;
+  const data = [];
+
+  for (let year = 0; year <= years; year += 1) {
+    const projectedEps = startEps * Math.pow(1 + growth, year);
+    const price = projectedEps * multiple;
+    data.push({
+      x: year,
+      y: price,
+      returnMultiple: current > 0 ? price / current : 0,
+    });
+  }
+
+  return {
+    symbol,
+    current,
+    terminalPrice: data[data.length - 1].y,
+    cagr: current > 0 ? Math.pow(data[data.length - 1].y / current, 1 / years) - 1 : 0,
+    data,
+  };
+}
+
+function runCompare() {
+  const years = Math.max(1, Math.min(15, Number(el("compareYears").value) || 5));
+  const stockA = compareProjectionSeries(
+    el("compareATicker").value.trim().toUpperCase() || "STOCK A",
+    Number(el("compareAPrice").value),
+    Number(el("compareAEps").value),
+    Number(el("compareAGrowth").value),
+    Number(el("compareAPe").value),
+    years,
+  );
+  const stockB = compareProjectionSeries(
+    el("compareBTicker").value.trim().toUpperCase() || "STOCK B",
+    Number(el("compareBPrice").value),
+    Number(el("compareBEps").value),
+    Number(el("compareBGrowth").value),
+    Number(el("compareBPe").value),
+    years,
+  );
+
+  el("compareCards").innerHTML = [stockA, stockB]
+    .map(
+      (item) => `
+        <article class="metric-card">
+          <span>${item.symbol}</span>
+          <strong>${formatDollarValue(item.terminalPrice)}</strong>
+          <p>${formatPercent(item.cagr)} annualized, ${item.data[item.data.length - 1].returnMultiple.toFixed(2)}x ending value</p>
+        </article>
+      `,
+    )
+    .join("");
+
   createLineChart("compareForward", "compareForwardChart", {
     datasets: [
       {
-        label: a.ticker,
-        data: a.yearly.map((point) => ({ x: point.x, y: point.price })),
+        label: stockA.symbol,
+        data: stockA.data,
         borderColor: "#4f8cff",
-        backgroundColor: "rgba(79, 140, 255, 0.18)",
+        backgroundColor: "rgba(79, 140, 255, 0.2)",
+        pointRadius: 0,
+        pointHitRadius: 18,
         fill: false,
-        tension: 0.22,
-        borderWidth: 2.5,
       },
       {
-        label: b.ticker,
-        data: b.yearly.map((point) => ({ x: point.x, y: point.price })),
-        borderColor: "#3ecf8e",
-        backgroundColor: "rgba(62, 207, 142, 0.18)",
+        label: stockB.symbol,
+        data: stockB.data,
+        borderColor: "#f4b74e",
+        backgroundColor: "rgba(244, 183, 78, 0.2)",
+        pointRadius: 0,
+        pointHitRadius: 18,
         fill: false,
-        tension: 0.22,
-        borderWidth: 2.5,
       },
     ],
     readoutId: "compareForwardReadout",
     xFormatter: (value) => `Year ${value}`,
+    xTime: false,
+    mode: "measure",
   });
-  setChartReadout("compareForwardReadout", `Forward comparison for ${a.ticker} and ${b.ticker} over ${years} years.`);
+  setChartReadout("compareForwardReadout", "Forward comparison details will appear here.");
 }
 
-async function loadProjectionHistoricalChart(symbol, range = "5y") {
-  const history = await fetchHistoricalData(symbol, range);
-  appState.projectionHistory = history;
-  if (appState.lastProjection && String(history.symbol || "").toUpperCase() === appState.lastProjection.input.ticker) {
-    drawProjectionUnifiedChart(appState.lastProjection, history);
+async function fetchCompareTickers() {
+  const button = el("fetchCompare");
+  button.disabled = true;
+  button.textContent = "Fetching...";
+  try {
+    const [stockA, stockB] = await Promise.all([
+      fetchStockData(el("compareATicker").value),
+      fetchStockData(el("compareBTicker").value),
+    ]);
+    el("compareATicker").value = stockA.symbol;
+    el("compareAPrice").value = Number(stockA.price || 0).toFixed(2);
+    el("compareAEps").value = Number(stockA.eps || 0).toFixed(2);
+    el("compareAGrowth").value = Number(stockA.estimatedGrowth || 10).toFixed(1);
+    el("compareAPe").value = Number(stockA.peTtm || 20).toFixed(1);
+
+    el("compareBTicker").value = stockB.symbol;
+    el("compareBPrice").value = Number(stockB.price || 0).toFixed(2);
+    el("compareBEps").value = Number(stockB.eps || 0).toFixed(2);
+    el("compareBGrowth").value = Number(stockB.estimatedGrowth || 10).toFixed(1);
+    el("compareBPe").value = Number(stockB.peTtm || 20).toFixed(1);
+
+    runCompare();
+    await loadCompareHistoricalChart(appState.compareHistoryRange);
+  } catch (error) {
+    setChartReadout("compareHistoricalReadout", error.message || "Could not fetch live comparison data.");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Fetch A & B";
   }
-  return history;
 }
 
 async function loadCompareHistoricalChart(range = "5y") {
-  const current = runCompare();
-  const [aHistory, bHistory] = await Promise.all([fetchHistoricalData(current.a.ticker, range), fetchHistoricalData(current.b.ticker, range)]);
+  const symbols = [el("compareATicker").value, el("compareBTicker").value].map((value) => String(value || "").trim().toUpperCase()).filter(Boolean);
+  if (symbols.length < 2) return;
+  const [histA, histB] = await Promise.all(symbols.map((symbol) => fetchHistoricalData(symbol, range)));
+  appState.compareHistorical = { symbols, range, series: [histA, histB] };
 
-  appState.compareHistorical = { a: aHistory, b: bHistory };
+  const datasets = [histA, histB].map((series, index) => {
+    const first = series.points[0]?.close || 1;
+    return {
+      label: `${series.symbol} historical`,
+      data: series.points.map((point) => ({
+        x: point.date,
+        y: first ? (point.close / first) * 100 : point.close,
+      })),
+      borderColor: index === 0 ? "#4f8cff" : "#f4b74e",
+      backgroundColor: index === 0 ? "rgba(79, 140, 255, 0.18)" : "rgba(244, 183, 78, 0.18)",
+      pointRadius: 0,
+      pointHitRadius: 18,
+      fill: false,
+    };
+  });
 
   createLineChart("compareHistorical", "compareHistoricalChart", {
-    datasets: [
-      {
-        label: `${aHistory.symbol} normalized`,
-        data: normalizeHistoricalPoints(aHistory.points),
-        borderColor: "#4f8cff",
-        backgroundColor: "rgba(79, 140, 255, 0.18)",
-        fill: false,
-        tension: 0.2,
-        borderWidth: 2.5,
-      },
-      {
-        label: `${bHistory.symbol} normalized`,
-        data: normalizeHistoricalPoints(bHistory.points),
-        borderColor: "#3ecf8e",
-        backgroundColor: "rgba(62, 207, 142, 0.18)",
-        fill: false,
-        tension: 0.2,
-        borderWidth: 2.5,
-      },
-    ],
+    datasets,
     readoutId: "compareHistoricalReadout",
     xFormatter: (value) => formatDate(value),
     xTime: true,
+    mode: "measure",
   });
-
-  setChartReadout("compareHistoricalReadout", `${aHistory.symbol} and ${bHistory.symbol} normalized over ${aHistory.rangeLabel || range}.`);
+  setChartReadout(
+    "compareHistoricalReadout",
+    `${symbols.join(" vs ")} ${range.toUpperCase()} history loaded. Click or drag to inspect exact points.`,
+  );
 }
 
-function resetChartView(key) {
-  const chart = chartRegistry[key];
-  if (!chart) return;
-  if (typeof chart.resetZoom === "function") {
-    chart.resetZoom();
+function runReverse() {
+  const price = Number(el("revPrice").value) || 0;
+  const eps = Number(el("revEps").value) || 0;
+  const pe = Number(el("revPe").value) || 0;
+  const years = Math.max(1, Number(el("revYears").value) || 5);
+
+  if (price <= 0 || eps <= 0 || pe <= 0) {
+    el("reverseAnswer").innerHTML = `<strong>Need positive inputs.</strong><p>Price, EPS, and exit P/E all need values above zero.</p>`;
+    return;
   }
-  if (typeof chart.$resetInteraction === "function") {
-    chart.$resetInteraction();
+
+  const targetEps = price / pe;
+  const impliedGrowth = Math.pow(targetEps / eps, 1 / years) - 1;
+  el("reverseAnswer").innerHTML = `
+    <strong>${formatPercent(impliedGrowth)} implied annual EPS growth</strong>
+    <p>If the market price is ${formatDollarValue(price)} and you expect a ${oneDecimal.format(pe)}x exit multiple in ${years} years, EPS must grow from ${formatDollarValue(eps)} to about ${formatDollarValue(targetEps)}.</p>
+  `;
+}
+
+function runMos() {
+  const fairValue = Number(el("fairValue").value) || 0;
+  const price = Number(el("mosPrice").value) || 0;
+  const requiredPct = (Number(el("mosPercent").value) || 0) / 100;
+  if (fairValue <= 0) {
+    el("mosAnswer").innerHTML = `<strong>Need a fair value.</strong><p>Enter your best fair value estimate first.</p>`;
+    return;
   }
+
+  const currentMargin = price > 0 ? 1 - price / fairValue : 0;
+  const targetBuy = fairValue * (1 - requiredPct);
+  el("mosAnswer").innerHTML = `
+    <strong>${formatPercent(currentMargin)} current margin of safety</strong>
+    <p>At ${formatDollarValue(price)}, you are ${(currentMargin >= 0 ? "buying below" : "paying above")} your ${formatDollarValue(fairValue)} fair value estimate. A ${formatPercent(requiredPct)} target margin would imply a buy price near ${formatDollarValue(targetBuy)}.</p>
+  `;
 }
 
-function updateChartMode() {
-  // Measure mode is the only active chart interaction mode right now.
-}
-
-function bindTabEvents() {
-  document.querySelectorAll(".tab").forEach((button) => {
-    button.addEventListener("click", () => activateTab(button.dataset.tab));
-  });
-}
-
-function bindChartControls() {
-  document.querySelectorAll("[data-chart-mode-target]").forEach((group) => {
-    group.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-mode]");
-      if (!button) return;
-      const chartKey = group.dataset.chartModeTarget;
-      group.querySelectorAll(".segmented-button").forEach((node) => node.classList.remove("active"));
-      button.classList.add("active");
-      updateChartMode(chartKey, button.dataset.mode);
-    });
-  });
-
-  document.querySelectorAll("[data-chart-reset]").forEach((button) => {
-    button.addEventListener("click", () => resetChartView(button.dataset.chartReset));
-  });
-
-  document.querySelectorAll("[data-chart-range-target]").forEach((group) => {
-    group.addEventListener("click", async (event) => {
-      const button = event.target.closest("[data-range]");
-      if (!button) return;
-      const chartKey = group.dataset.chartRangeTarget;
-      group.querySelectorAll(".segmented-button").forEach((node) => node.classList.remove("active"));
-      button.classList.add("active");
-
-      if (chartKey === "projectionHistorical") {
-        appState.projectionHistoryRange = button.dataset.range;
-        await loadProjectionHistoricalChart(el("ticker").value, appState.projectionHistoryRange);
-      } else if (chartKey === "compareHistorical") {
-        appState.compareHistoryRange = button.dataset.range;
-        await loadCompareHistoricalChart(appState.compareHistoryRange);
-      }
-    });
-  });
-}
-
-function bindWatchlistActions() {
-  el("watchlistGrid").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-watch-action]");
-    if (!button) return;
-    const index = Number(button.dataset.watchIndex);
-    const item = appState.watchlist[index];
-    if (!item) return;
-
-    if (button.dataset.watchAction === "load") {
-      restoreProjectionInputs(item.inputs);
-      runProjection();
-      activateTab("projection");
-      setInlineStatus("projectionSaveStatus", `${item.ticker} loaded from watchlist.`, "positive");
-    } else if (button.dataset.watchAction === "delete") {
-      appState.watchlist.splice(index, 1);
-      persistWatchlist();
-      renderWatchlist();
-    }
-  });
-
-  el("watchlistGrid").addEventListener("input", (event) => {
-    const field = event.target.closest("[data-watch-note]");
-    if (!field) return;
-    const index = Number(field.dataset.watchNote);
-    const item = appState.watchlist[index];
-    if (!item) return;
-    item.notes = field.value;
-    persistWatchlist();
-    setInlineStatus("watchlistStatus", `Notes saved for ${item.ticker}.`, "positive");
-  });
-}
-
-function bindPortfolioActions() {
-  on("tradeForm", "submit", handleTradeSubmit);
-  on("resetTradeForm", "click", resetTradeForm);
-  on("connectDriveButton", "click", connectDrive);
-  on("disconnectDriveButton", "click", () => {
-    disconnectDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
-  });
-  on("syncPortfolioNowButton", "click", () => {
-    syncPortfolioToDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
-  });
-  on("loadDrivePortfolioButton", "click", () => {
-    loadPortfolioFromDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
-  });
-  on("reloadRemotePortfolioButton", "click", () => {
-    loadPortfolioFromDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
-  });
-  on("forceOverwriteRemoteButton", "click", () => {
-    syncPortfolioToDrive({ force: true }).catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
-  });
-  on("downloadPortfolioTemplate", "click", downloadPortfolioTemplate);
-  on("importPortfolioButton", "click", () => el("portfolioFileInput")?.click());
-  on("exportPortfolioButton", "click", exportPortfolioWorkbook);
-  on("exportTradesCsvButton", "click", exportTradesCsv);
-  on("refreshPortfolioQuotes", "click", refreshPortfolioQuotes);
-
-  on("portfolioFileInput", "change", async (event) => {
-    const [file] = event.target.files || [];
-    if (!file) return;
-    try {
-      const imported = await importPortfolioWorkbook(file);
-      appState.portfolio.trades = imported.trades;
-      appState.portfolio.holdings = deriveHoldingsFromTrades(imported.trades, false);
-      queuePortfolioDriveSync();
-      renderPortfolio();
-      setInlineStatus(
-        "portfolioStatus",
-        appState.driveAuth.connected
-          ? "Workbook imported and queued for Drive sync. Pull latest info to add current quotes."
-          : "Workbook imported locally. Connect Drive to make it permanent across devices.",
-        "positive",
-      );
-    } catch (error) {
-      setInlineStatus("portfolioStatus", error.message, "negative");
-    } finally {
-      event.target.value = "";
-    }
-  });
-
-  on("portfolioTradesTable", "click", (event) => {
-    const button = event.target.closest("[data-trade-action]");
-    if (!button) return;
-    const tradeId = button.dataset.tradeId;
-    if (button.dataset.tradeAction === "edit") {
-      editTrade(tradeId);
-    } else if (button.dataset.tradeAction === "delete") {
-      deleteTrade(tradeId);
-    }
-  });
-}
-
-function bindEvents() {
-  bindTabEvents();
-  bindChartControls();
-  bindWatchlistActions();
-  bindPortfolioActions();
-
-  on("projectionForm", "submit", async (event) => {
-    event.preventDefault();
-    runProjection();
-    triggerProjectionTickerFetch();
-    await loadProjectionHistoricalChart(el("ticker").value, appState.projectionHistoryRange).catch(() => {});
-  });
-
-  on("ticker", "input", () => {
-    normalizeProjectionTicker();
-    runProjection();
-  });
-  on("ticker", "blur", () => {
-    triggerProjectionTickerFetch();
-  });
-  on("ticker", "keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      triggerProjectionTickerFetch();
-    }
-  });
-
-  [
-    "currentPrice",
-    "revenue",
-    "shares",
-    "eps",
-    "years",
-    "bearGrowth",
-    "bearMargin",
-    "bearPe",
-    "baseGrowth",
-    "baseMargin",
-    "basePe",
-    "bullGrowth",
-    "bullMargin",
-    "bullPe",
-  ].forEach((id) => {
-    on(id, "input", () => {
-      runProjection();
-    });
-  });
-
-  on("saveProjection", "click", saveProjection);
-  on("runCompare", "click", async () => {
-    runCompare();
-    await loadCompareHistoricalChart(appState.compareHistoryRange).catch(() => {});
-  });
-  on("fetchCompare", "click", fetchCompareTickers);
-  on("runReverse", "click", runReverse);
-  on("runMos", "click", runMos);
-  on("sp500Form", "submit", (event) => {
-    event.preventDefault();
-    renderSp500();
-  });
-  on("clearWatchlist", "click", () => {
-    appState.watchlist = [];
-    persistWatchlist();
-    renderWatchlist();
-  });
-  on("useCurrentForA", "click", () => {
-    const input = readProjectionInputs();
-    el("compareATicker").value = input.ticker;
-    el("compareAPrice").value = input.currentPrice;
-    el("compareAEps").value = input.eps;
-    el("compareAGrowth").value = (input.cases.base.growth * 100).toFixed(1);
-    el("compareAPe").value = input.cases.base.pe;
-    runCompare();
-  });
-  on("compareViewToggle", "click", (event) => {
-    const button = event.target.closest("[data-compare-view]");
-    if (!button) return;
-    toggleCompareView(button.dataset.compareView);
-  });
-}
-
-function activateTab(tabId) {
-  document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === tabId));
-  document.querySelectorAll(".panel").forEach((panel) => panel.classList.toggle("active", panel.id === tabId));
-  resizeVisibleCharts();
-}
-
-function renderSp500() {
-  const principal = Number(el("spStart").value) || 0;
+function calculateSp500Path() {
+  const start = Number(el("spStart").value) || 0;
   const monthly = Number(el("spMonthly").value) || 0;
-  const rate = (Number(el("spRate").value) || 0) / 100;
-  const years = Math.max(1, Math.min(50, Number(el("spYears").value) || 1));
-  const monthlyRate = rate / 12;
-  let balance = principal;
-  const rows = [];
+  const annualRate = (Number(el("spRate").value) || 0) / 100;
+  const years = Math.max(1, Math.min(50, Number(el("spYears").value) || 10));
+  const monthlyRate = annualRate / 12;
+
+  let value = start;
+  let totalContributions = start;
+  const rows = [{ year: 0, startValue: start, contributions: 0, growth: 0, endingValue: start }];
 
   for (let year = 1; year <= years; year += 1) {
-    const startValue = balance;
+    const startValue = value;
     let contributions = 0;
-    let growth = 0;
     for (let month = 0; month < 12; month += 1) {
-      balance += monthly;
+      value += monthly;
       contributions += monthly;
-      const monthGrowth = balance * monthlyRate;
-      balance += monthGrowth;
-      growth += monthGrowth;
+      value *= 1 + monthlyRate;
     }
+    totalContributions += contributions;
     rows.push({
       year,
       startValue,
       contributions,
-      growth,
-      endingValue: balance,
+      growth: value - startValue - contributions,
+      endingValue: value,
     });
   }
 
-  const totalContributed = principal + monthly * 12 * years;
-  const growthEarned = balance - totalContributed;
+  return {
+    rows,
+    totalContributions,
+    endingValue: value,
+    totalGrowth: value - totalContributions,
+  };
+}
 
+function renderSp500() {
+  const model = calculateSp500Path();
   el("sp500Cards").innerHTML = [
-    ["Ending value", formatDollarValue(balance)],
-    ["Total contributed", formatDollarValue(totalContributed)],
-    ["Growth earned", formatDollarValue(growthEarned)],
+    ["Ending value", formatDollarValue(model.endingValue)],
+    ["Total contributed", formatDollarValue(model.totalContributions)],
+    ["Total growth", formatDollarValue(model.totalGrowth)],
   ]
     .map(
       ([label, value]) => `
@@ -1518,7 +1373,7 @@ function renderSp500() {
     )
     .join("");
 
-  el("sp500Table").innerHTML = rows
+  el("sp500Table").innerHTML = model.rows
     .map(
       (row) => `
         <tr>
@@ -1535,39 +1390,339 @@ function renderSp500() {
   createLineChart("sp500Chart", "sp500ChartCanvas", {
     datasets: [
       {
-        label: "Portfolio value",
-        data: rows.map((row) => ({ x: row.year, y: row.endingValue })),
-        borderColor: "#4f8cff",
-        backgroundColor: "rgba(79, 140, 255, 0.18)",
+        label: "S&P 500 path",
+        data: model.rows.map((row) => ({ x: row.year, y: row.endingValue })),
+        borderColor: "#3ecf8e",
+        backgroundColor: "rgba(62, 207, 142, 0.18)",
+        pointRadius: 0,
+        pointHitRadius: 18,
         fill: false,
-        tension: 0.22,
-        borderWidth: 2.8,
       },
     ],
     readoutId: "sp500Readout",
     xFormatter: (value) => `Year ${value}`,
+    xTime: false,
+    mode: "measure",
+  });
+  setChartReadout("sp500Readout", "S&P chart details will appear here.");
+}
+
+function renderWatchlist() {
+  const grid = el("watchlistGrid");
+  if (!appState.watchlist.length) {
+    grid.innerHTML = `<div class="empty-state">No saved projections yet. Save one from the Projection tab and it will show up here immediately.</div>`;
+    return;
+  }
+
+  grid.innerHTML = appState.watchlist
+    .map(
+      (item, index) => `
+        <article class="watch-card">
+          <span>${item.ticker}</span>
+          <h3>${formatDollarValue(item.targets.base)}</h3>
+          <p>Saved ${formatDate(item.savedAt)}</p>
+          <dl>
+            <div><dt>Current price</dt><dd>${formatDollarValue(item.currentPrice)}</dd></div>
+            <div><dt>Bear target</dt><dd>${formatDollarValue(item.targets.bear)}</dd></div>
+            <div><dt>Base CAGR</dt><dd>${formatPercent(item.baseCagr)}</dd></div>
+            <div><dt>Bull target</dt><dd>${formatDollarValue(item.targets.bull)}</dd></div>
+          </dl>
+          <label class="watch-note-field">
+            <span>Note</span>
+            <textarea data-watch-note="${index}" placeholder="Quick thesis, trigger, or checklist">${escapeHtml(item.notes || "")}</textarea>
+          </label>
+          <div class="watch-actions">
+            <button class="tiny-button" type="button" data-watch-action="load" data-watch-index="${index}">Load into projection</button>
+            <button class="tiny-button danger" type="button" data-watch-action="delete" data-watch-index="${index}">Delete</button>
+          </div>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function normalizePortfolioHolding(holding) {
+  return {
+    ...holding,
+    symbol: String(holding.symbol || "").trim().toUpperCase(),
+    asset: holding.asset || holding.symbol || "Holding",
+    sector: holding.sector || "Unassigned",
+    account: holding.account || "Primary",
+    quantity: Number(holding.quantity) || 0,
+    averageCost: Number(holding.averageCost) || 0,
+    initialValue: Number(holding.initialValue) || 0,
+    currentPrice: Number(holding.currentPrice) || 0,
+    currentValue: Number(holding.currentValue) || 0,
+    dayChange: Number(holding.dayChange) || 0,
+    dayPercentChange: Number(holding.dayPercentChange) || 0,
+    unrealizedProfit: Number(holding.unrealizedProfit) || 0,
+    realizedProfit: Number(holding.realizedProfit) || 0,
+    allocation: Number(holding.allocation) || 0,
+  };
+}
+
+function formatTradeForWorkbook(trade) {
+  return {
+    Date: trade.date,
+    Symbol: trade.symbol,
+    Asset: trade.asset,
+    Sector: trade.sector,
+    Side: trade.side,
+    Quantity: trade.quantity,
+    "Trade Price": trade.tradePrice,
+    Fees: trade.fees,
+    Account: trade.account,
+    Notes: trade.notes,
+  };
+}
+
+function calculatePortfolioProjectionFromQuotes(holdings, quoteMap) {
+  const validHoldings = holdings.filter((holding) => quoteMap.has(holding.symbol));
+  if (!validHoldings.length) {
+    return null;
+  }
+
+  const cases = scenarioConfig.map((scenario) => {
+    const holdingsBreakdown = validHoldings.map((holding) => {
+      const quote = quoteMap.get(holding.symbol) || {};
+      const baseGrowthPct = Number(quote.estimatedGrowth) || 10;
+      const currentPrice = Number(quote.price) || Number(holding.currentPrice) || 0;
+      const eps = Number(quote.eps) || (Number(holding.averageCost) > 0 ? Number(holding.averageCost) / 20 : 1);
+      const terminalPe = Number(quote.peTtm) || 20;
+      const model = compareProjectionSeries(
+        holding.symbol,
+        currentPrice,
+        eps,
+        Math.max(1, baseGrowthPct + (scenario.key === "bear" ? -4 : scenario.key === "bull" ? 4 : 0)),
+        Math.max(8, terminalPe + (scenario.key === "bear" ? -4 : scenario.key === "bull" ? 4 : 0)),
+        Math.max(1, Number(el("years")?.value) || 5),
+      );
+      const currentValue = Number(holding.currentValue) || (Number(holding.quantity) || 0) * currentPrice;
+      const projectedValue = (Number(holding.quantity) || 0) * model.terminalPrice;
+      return {
+        symbol: holding.symbol,
+        asset: holding.asset,
+        sector: holding.sector,
+        quantity: Number(holding.quantity) || 0,
+        currentValue,
+        projectedValue,
+        impliedGain: projectedValue - currentValue,
+        cagr: model.cagr,
+      };
+    });
+
+    const currentValue = holdingsBreakdown.reduce((sum, holding) => sum + holding.currentValue, 0);
+    const projectedValue = holdingsBreakdown.reduce((sum, holding) => sum + holding.projectedValue, 0);
+    const years = Math.max(1, Number(el("years")?.value) || 5);
+    const cagr = currentValue > 0 && projectedValue > 0 ? Math.pow(projectedValue / currentValue, 1 / years) - 1 : 0;
+
+    return {
+      key: scenario.key,
+      label: scenario.label,
+      color: scenario.color,
+      currentValue,
+      projectedValue,
+      dollarGain: projectedValue - currentValue,
+      cagr,
+      holdings: holdingsBreakdown,
+    };
   });
 
-  setChartReadout("sp500Readout", `Projected ending value after ${years} years: ${formatDollarValue(balance)}.`);
+  const base = cases.find((item) => item.key === "base") || cases[1] || cases[0];
+  const spotlight = [...base.holdings]
+    .sort((a, b) => (b.projectedValue || 0) - (a.projectedValue || 0))
+    .slice(0, 5);
+
+  return {
+    asOf: new Date().toISOString(),
+    cases,
+    spotlight,
+  };
+}
+
+async function refreshPortfolioQuotes() {
+  const holdings = Array.isArray(appState.portfolio.holdings) ? appState.portfolio.holdings : [];
+  if (!holdings.length) {
+    setInlineStatus("portfolioStatus", "Load or import your portfolio first.", "negative");
+    return;
+  }
+
+  setInlineStatus("portfolioStatus", "Refreshing quotes...", "neutral");
+  const symbols = [...new Set(holdings.map((holding) => holding.symbol).filter(Boolean))];
+  const results = await Promise.allSettled(symbols.map((symbol) => fetchStockData(symbol)));
+  const quoteMap = new Map();
+  let successCount = 0;
+  let failureCount = 0;
+
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      quoteMap.set(symbols[index], result.value);
+      successCount += 1;
+    } else {
+      failureCount += 1;
+    }
+  });
+
+  const holdingsBase = appState.portfolio.trades.length
+    ? deriveHoldingsFromTrades(appState.portfolio.trades, false)
+    : holdings.map(normalizePortfolioHolding);
+
+  appState.portfolio.holdings = holdingsBase.map((holding) => {
+    const quote = quoteMap.get(holding.symbol);
+    if (!quote) {
+      return normalizePortfolioHolding(holding);
+    }
+    const currentPrice = Number(quote.price) || Number(holding.currentPrice) || 0;
+    const quantity = Number(holding.quantity) || 0;
+    const currentValue = currentPrice * quantity;
+    const initialValue = Number(holding.initialValue) || Number(holding.averageCost || 0) * quantity;
+    const previousClose = Number(quote.previousClose) || currentPrice;
+    const dayPercentChange = previousClose ? ((currentPrice - previousClose) / previousClose) * 100 : 0;
+    const dayChange = (currentPrice - previousClose) * quantity;
+    return {
+      ...normalizePortfolioHolding(holding),
+      asset: quote.name || holding.asset,
+      sector: quote.sector || holding.sector,
+      currentPrice,
+      currentValue,
+      initialValue,
+      dayChange,
+      dayPercentChange,
+      unrealizedProfit: currentValue - initialValue,
+    };
+  });
+
+  appState.portfolioProjection = null;
+  renderPortfolio();
+  queuePortfolioDriveSync();
+  setInlineStatus("portfolioStatus", appState.driveAuth.connected ? "Portfolio quotes refreshed and queued for Drive sync." : "Portfolio quotes refreshed.", failureCount ? "neutral" : "positive");
+}
+
+function portfolioTotals(holdings) {
+  return holdings.reduce(
+    (totals, holding) => {
+      totals.currentValue += Number(holding.currentValue) || 0;
+      totals.initialValue += Number(holding.initialValue) || 0;
+      totals.dayChange += Number(holding.dayChange) || 0;
+      totals.unrealizedProfit += Number(holding.unrealizedProfit) || 0;
+      totals.realizedProfit += Number(holding.realizedProfit) || 0;
+      return totals;
+    },
+    { currentValue: 0, initialValue: 0, dayChange: 0, unrealizedProfit: 0, realizedProfit: 0 },
+  );
+}
+
+function getPortfolioDisplayHoldings() {
+  const localHoldings = Array.isArray(appState.portfolio.holdings) ? appState.portfolio.holdings : [];
+  if (localHoldings.length) {
+    return localHoldings.map(normalizePortfolioHolding);
+  }
+  if (appState.portfolio.trades.length) {
+    return deriveHoldingsFromTrades(appState.portfolio.trades, false);
+  }
+  return [];
+}
+
+function renderPortfolioHero(holdings) {
+  const container = el("portfolioHero");
+  if (!container) return;
+  if (!holdings.length) {
+    container.innerHTML = `<article class="hero-card"><span>Portfolio</span><strong>Ready for holdings</strong><p>Import a workbook, sync from Drive, or add trades manually to light up the dashboard.</p></article>`;
+    return;
+  }
+  const totals = portfolioTotals(holdings);
+  const bestHolding = [...holdings].sort((a, b) => (b.unrealizedProfit || 0) - (a.unrealizedProfit || 0))[0];
+  const biggestHolding = [...holdings].sort((a, b) => (b.currentValue || 0) - (a.currentValue || 0))[0];
+  container.innerHTML = `
+    <article class="hero-card">
+      <span>Total portfolio value</span>
+      <strong>${formatDollarValue(totals.currentValue)}</strong>
+      <p>${holdings.length} holdings across ${new Set(holdings.map((holding) => holding.account)).size} account${new Set(holdings.map((holding) => holding.account)).size === 1 ? "" : "s"}. Biggest line item: ${biggestHolding ? biggestHolding.symbol : "N/A"}.</p>
+    </article>
+    <article class="hero-card">
+      <span>Unrealized profit</span>
+      <strong>${formatDollarValue(totals.unrealizedProfit)}</strong>
+      <p>That is ${formatPercent(totals.initialValue ? totals.unrealizedProfit / totals.initialValue : 0)} versus the estimated cost basis currently in the dashboard.</p>
+    </article>
+    <article class="hero-card">
+      <span>Best contributor</span>
+      <strong>${bestHolding ? bestHolding.symbol : "N/A"}</strong>
+      <p>${bestHolding ? `${formatDollarValue(bestHolding.unrealizedProfit || 0)} unrealized on ${formatDollarValue(bestHolding.currentValue || 0)} of current value.` : "Load quotes to surface the strongest position."}</p>
+    </article>
+    <article class="hero-card">
+      <span>Day change</span>
+      <strong>${formatDollarValue(totals.dayChange)}</strong>
+      <p>${formatPercent(totals.currentValue ? totals.dayChange / Math.max(totals.currentValue - totals.dayChange, 1) : 0)} move based on the quotes currently loaded into the app.</p>
+    </article>
+  `;
 }
 
 function renderPortfolioCards(holdings) {
-  const totalValue = holdings.reduce((sum, holding) => sum + (Number(holding.currentValue) || 0), 0);
-  const totalCost = holdings.reduce((sum, holding) => sum + (Number(holding.initialValue) || 0), 0);
-  const unrealized = holdings.reduce((sum, holding) => sum + (Number(holding.unrealizedProfit) || 0), 0);
-  const dayChange = holdings.reduce((sum, holding) => sum + (Number(holding.dayChange) || 0), 0);
-
+  const totals = portfolioTotals(holdings);
   el("portfolioCards").innerHTML = [
-    ["Market value", formatDollarValue(totalValue), "Current holdings value"],
-    ["Cost basis", formatDollarValue(totalCost), "Initial deployed capital"],
-    ["Unrealized P/L", formatDollarValue(unrealized), "Open profit across holdings", classForValue(unrealized)],
-    ["Day change", formatDollarValue(dayChange), "Move versus prior close", classForValue(dayChange)],
+    ["Portfolio value", formatDollarValue(totals.currentValue)],
+    ["Day change", formatDollarValue(totals.dayChange)],
+    ["Unrealized profit", formatDollarValue(totals.unrealizedProfit)],
+    ["Realized profit", formatDollarValue(totals.realizedProfit)],
   ]
     .map(
-      ([label, value, copy, toneClass = ""]) => `
-        <article class="metric-card ${toneClass}">
+      ([label, value]) => `
+        <article class="metric-card">
           <span>${label}</span>
           <strong>${value}</strong>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+function renderPortfolioSpotlight(holdings) {
+  const container = el("portfolioSpotlight");
+  if (!container) return;
+  if (!holdings.length) {
+    container.innerHTML = `<div class="portfolio-empty-card">No holdings yet. Once your portfolio loads, this section will call out concentration, best performers, and account exposure.</div>`;
+    return;
+  }
+
+  const totals = portfolioTotals(holdings);
+  const biggest = [...holdings].sort((a, b) => (b.currentValue || 0) - (a.currentValue || 0))[0];
+  const best = [...holdings].sort((a, b) => (b.unrealizedProfit || 0) - (a.unrealizedProfit || 0))[0];
+  const worst = [...holdings].sort((a, b) => (a.unrealizedProfit || 0) - (b.unrealizedProfit || 0))[0];
+  const accountBreakdown = holdings.reduce((map, holding) => {
+    map.set(holding.account || "Primary", (map.get(holding.account || "Primary") || 0) + (holding.currentValue || 0));
+    return map;
+  }, new Map());
+  const topAccount = [...accountBreakdown.entries()].sort((a, b) => b[1] - a[1])[0];
+
+  const items = [
+    [
+      "Largest position",
+      biggest ? biggest.symbol : "N/A",
+      biggest ? `${formatPercent(totals.currentValue ? (biggest.currentValue || 0) / totals.currentValue : 0)} of the portfolio at ${formatDollarValue(biggest.currentValue || 0)}` : "No positions loaded",
+    ],
+    [
+      "Best unrealized",
+      best ? best.symbol : "N/A",
+      best ? `${formatDollarValue(best.unrealizedProfit || 0)} on ${formatDollarValue(best.currentValue || 0)} of current value` : "No positions loaded",
+    ],
+    [
+      "Weakest unrealized",
+      worst ? worst.symbol : "N/A",
+      worst ? `${formatDollarValue(worst.unrealizedProfit || 0)} on ${formatDollarValue(worst.currentValue || 0)} of current value` : "No positions loaded",
+    ],
+    [
+      "Top account",
+      topAccount ? topAccount[0] : "N/A",
+      topAccount ? `${formatDollarValue(topAccount[1])} currently allocated there` : "No accounts loaded",
+    ],
+  ];
+
+  container.innerHTML = items
+    .map(
+      ([label, title, copy]) => `
+        <article class="spotlight-card">
+          <span>${label}</span>
+          <strong>${title}</strong>
           <p>${copy}</p>
         </article>
       `,
@@ -1575,8 +1730,113 @@ function renderPortfolioCards(holdings) {
     .join("");
 }
 
+function buildPortfolioProjectionScenarioCards(cases) {
+  return cases
+    .map((scenario) => {
+      const biggestProjected = [...scenario.holdings].sort((a, b) => (b.projectedValue || 0) - (a.projectedValue || 0))[0];
+      return `
+        <article class="scenario-card" data-case="${scenario.key}">
+          <span>${scenario.label} case</span>
+          <strong>${formatDollarValue(scenario.projectedValue)}</strong>
+          <p>${formatPercent(scenario.cagr)} annualized with ${formatDollarValue(scenario.dollarGain)} of projected value creation. ${biggestProjected ? `${biggestProjected.symbol} leads this case at ${formatDollarValue(biggestProjected.projectedValue)}.` : ""}</p>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderPortfolioProjection(result = appState.portfolioProjection) {
+  const cards = el("portfolioProjectionCards");
+  const scenarios = el("portfolioProjectionScenarios");
+  const status = el("portfolioProjectionStatus");
+  if (!cards || !scenarios || !status) return;
+
+  if (!result) {
+    cards.innerHTML = "";
+    scenarios.innerHTML = `<div class="portfolio-empty-card">Run the portfolio projection after your holdings load to see aggregate bear, base, and bull outcomes for the whole portfolio.</div>`;
+    status.textContent = "";
+    return;
+  }
+
+  cards.innerHTML = result.cases
+    .map(
+      (scenario) => `
+        <article class="metric-card">
+          <span>${scenario.label} outlook</span>
+          <strong>${formatDollarValue(scenario.projectedValue)}</strong>
+          <p>${formatPercent(scenario.cagr)} annualized from ${formatDollarValue(scenario.currentValue)} today.</p>
+        </article>
+      `,
+    )
+    .join("");
+
+  scenarios.innerHTML = buildPortfolioProjectionScenarioCards(result.cases);
+  status.textContent = `Projection updated ${formatDate(result.asOf)} using the currently loaded holdings and quote assumptions.`;
+}
+
+async function runPortfolioProjection() {
+  const holdings = getPortfolioDisplayHoldings();
+  if (!holdings.length) {
+    setInlineStatus("portfolioProjectionStatus", "Load your portfolio first so the projection has holdings to analyze.", "negative");
+    return;
+  }
+
+  setInlineStatus("portfolioProjectionStatus", "Running projections across the full portfolio...", "neutral");
+  const symbols = [...new Set(holdings.map((holding) => holding.symbol).filter(Boolean))];
+  const results = await Promise.allSettled(symbols.map((symbol) => fetchStockData(symbol)));
+  const quoteMap = new Map();
+  let successCount = 0;
+
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      quoteMap.set(symbols[index], result.value);
+      successCount += 1;
+    }
+  });
+
+  if (!successCount) {
+    setInlineStatus("portfolioProjectionStatus", "Could not load any live quote data for the projection run.", "negative");
+    return;
+  }
+
+  appState.portfolio.holdings = holdings.map((holding) => {
+    const quote = quoteMap.get(holding.symbol);
+    if (!quote) return normalizePortfolioHolding(holding);
+    const currentPrice = Number(quote.price) || Number(holding.currentPrice) || 0;
+    const quantity = Number(holding.quantity) || 0;
+    const currentValue = currentPrice * quantity;
+    const initialValue = Number(holding.initialValue) || Number(holding.averageCost || 0) * quantity;
+    return {
+      ...normalizePortfolioHolding(holding),
+      asset: quote.name || holding.asset,
+      sector: quote.sector || holding.sector,
+      currentPrice,
+      currentValue,
+      initialValue,
+      unrealizedProfit: currentValue - initialValue,
+    };
+  });
+
+  const totals = portfolioTotals(appState.portfolio.holdings);
+  appState.portfolio.holdings = appState.portfolio.holdings.map((holding) => ({
+    ...holding,
+    allocation: totals.currentValue > 0 ? ((holding.currentValue || 0) / totals.currentValue) * 100 : 0,
+  }));
+
+  appState.portfolioProjection = calculatePortfolioProjectionFromQuotes(appState.portfolio.holdings, quoteMap);
+  persistPortfolioState();
+  renderPortfolio();
+  renderPortfolioProjection();
+  setInlineStatus("portfolioProjectionStatus", `Projection ran across ${successCount} live quote ${successCount === 1 ? "ticker" : "tickers"}.`, "positive");
+}
+
 function renderPortfolioTrades() {
-  el("portfolioTradesTable").innerHTML = appState.portfolio.trades
+  const tbody = el("portfolioTradesTable");
+  if (!appState.portfolio.trades.length) {
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">No trades loaded yet.</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = appState.portfolio.trades
     .map(
       (trade) => `
         <tr>
@@ -1598,23 +1858,31 @@ function renderPortfolioTrades() {
 }
 
 function renderPortfolioHoldings() {
-  el("portfolioHoldingsTable").innerHTML = appState.portfolio.holdings
+  const tbody = el("portfolioHoldingsTable");
+  const holdings = appState.portfolio.holdings || [];
+  if (!holdings.length) {
+    tbody.innerHTML = `<tr><td colspan="13"><div class="empty-state">No holdings loaded yet.</div></td></tr>`;
+    return;
+  }
+
+  const totals = portfolioTotals(holdings);
+  tbody.innerHTML = holdings
     .map(
       (holding) => `
         <tr>
           <td>${holding.account}</td>
           <td>${holding.sector}</td>
           <td>${holding.asset}</td>
-          <td>${formatDollarValue(holding.currentPrice || 0)}</td>
-          <td>${formatDollarValue(holding.averageCost || 0)}</td>
-          <td>${holding.quantity || 0}</td>
-          <td>${formatDollarValue(holding.initialValue || 0)}</td>
-          <td>${formatDollarValue(holding.currentValue || 0)}</td>
-          <td class="${classForValue(holding.dayChange || 0)}">${formatDollarValue(holding.dayChange || 0)}</td>
-          <td class="${classForValue(holding.dayPercentChange || 0)}">${formatPercent((holding.dayPercentChange || 0) / 100)}</td>
-          <td class="${classForValue(holding.unrealizedProfit || 0)}">${formatDollarValue(holding.unrealizedProfit || 0)}</td>
-          <td class="${classForValue(holding.realizedProfit || 0)}">${formatDollarValue(holding.realizedProfit || 0)}</td>
-          <td>${formatPercent((holding.allocation || 0) / 100)}</td>
+          <td>${formatDollarValue(holding.currentPrice)}</td>
+          <td>${formatDollarValue(holding.averageCost)}</td>
+          <td>${wholeNumber.format(holding.quantity)}</td>
+          <td>${formatDollarValue(holding.initialValue)}</td>
+          <td>${formatDollarValue(holding.currentValue)}</td>
+          <td class="${classForValue(holding.dayChange)}">${formatDollarValue(holding.dayChange)}</td>
+          <td class="${classForValue(holding.dayPercentChange)}">${formatPercent((holding.dayPercentChange || 0) / 100)}</td>
+          <td class="${classForValue(holding.unrealizedProfit)}">${formatDollarValue(holding.unrealizedProfit)}</td>
+          <td class="${classForValue(holding.realizedProfit)}">${formatDollarValue(holding.realizedProfit)}</td>
+          <td>${formatPercent(totals.currentValue ? holding.currentValue / totals.currentValue : 0)}</td>
         </tr>
       `,
     )
@@ -1623,7 +1891,10 @@ function renderPortfolioHoldings() {
 
 function createPieChart(chartKey, canvasId, labels, values, palette) {
   destroyChart(chartKey);
-  const ctx = el(canvasId).getContext("2d");
+  const canvas = el(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
   const chart = new Chart(ctx, {
     type: "doughnut",
     data: {
@@ -1701,13 +1972,15 @@ function renderPortfolioCharts(holdings) {
 }
 
 function renderPortfolio() {
-  if (!Array.isArray(appState.portfolio.holdings)) {
-    appState.portfolio.holdings = [];
-  }
-  renderPortfolioCards(appState.portfolio.holdings);
+  const holdings = getPortfolioDisplayHoldings();
+  appState.portfolio.holdings = holdings;
+  renderPortfolioHero(holdings);
+  renderPortfolioCards(holdings);
+  renderPortfolioSpotlight(holdings);
   renderPortfolioTrades();
   renderPortfolioHoldings();
-  renderPortfolioCharts(appState.portfolio.holdings);
+  renderPortfolioCharts(holdings);
+  renderPortfolioProjection();
   renderPortfolioSyncState();
 }
 
@@ -1758,6 +2031,7 @@ async function handleTradeSubmit(event) {
     const trade = readTradeForm();
     upsertTrade(trade);
     appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
+    appState.portfolioProjection = null;
     queuePortfolioDriveSync();
     renderPortfolio();
     resetTradeForm();
@@ -1794,6 +2068,7 @@ function editTrade(tradeId) {
 function deleteTrade(tradeId) {
   appState.portfolio.trades = appState.portfolio.trades.filter((item) => item.id !== tradeId);
   appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
+  appState.portfolioProjection = null;
   queuePortfolioDriveSync();
   renderPortfolio();
   setInlineStatus("portfolioStatus", appState.driveAuth.connected ? "Trade deleted and queued for Drive sync." : "Trade deleted locally.", "positive");
@@ -1806,17 +2081,17 @@ function rowsHaveColumns(rows, required) {
 
 function normalizeImportedTrade(row, index) {
   return {
-    id: row.id || `import_${Date.now()}_${index}`,
-    date: normalizeImportDate(row.Date),
-    symbol: String(row.Symbol || "").trim().toUpperCase(),
-    asset: String(row.Asset || "").trim(),
-    sector: String(row.Sector || "Unassigned").trim(),
-    side: String(row.Side || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy",
-    quantity: Number(row.Quantity) || 0,
-    tradePrice: Number(row["Trade Price"]) || 0,
-    fees: Number(row.Fees) || 0,
-    account: String(row.Account || "Primary").trim(),
-    notes: String(row.Notes || "").trim(),
+    id: row.id || row.Id || `import_${Date.now()}_${index}`,
+    date: normalizeImportDate(row.date || row.Date),
+    symbol: String(row.symbol || row.Symbol || "").trim().toUpperCase(),
+    asset: String(row.asset || row.Asset || "").trim(),
+    sector: String(row.sector || row.Sector || "Unassigned").trim(),
+    side: String(row.side || row.Side || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy",
+    quantity: Number(row.quantity ?? row.Quantity) || 0,
+    tradePrice: Number(row.tradePrice ?? row["Trade Price"]) || 0,
+    fees: Number(row.fees ?? row.Fees) || 0,
+    account: String(row.account || row.Account || "Primary").trim(),
+    notes: String(row.notes || row.Notes || "").trim(),
   };
 }
 
@@ -1953,198 +2228,259 @@ function downloadPortfolioTemplate() {
   XLSX.writeFile(workbook, "portfolio-template.xlsx");
 }
 
-async function refreshPortfolioQuotes() {
-  const holdings = Array.isArray(appState.portfolio.holdings) ? appState.portfolio.holdings : [];
-  if (!holdings.length) {
-    setInlineStatus("portfolioStatus", "Add or import holdings before refreshing quotes.", "negative");
-    return;
-  }
-
-  const symbols = [...new Set(holdings.map((holding) => String(holding.symbol || "").trim().toUpperCase()).filter(Boolean))];
-  if (!symbols.length) {
-    setInlineStatus("portfolioStatus", "No ticker symbols were found in the portfolio.", "negative");
-    return;
-  }
-
-  setInlineStatus("portfolioStatus", "Refreshing quotes...", "neutral");
-
-  const results = await Promise.allSettled(
-    symbols.map(async (symbol) => {
-      const data = await fetchStockData(symbol);
-      return [symbol, data];
-    }),
-  );
-
-  const quoteMap = new Map();
-  let successCount = 0;
-  let failureCount = 0;
-
-  results.forEach((result, index) => {
-    if (result.status === "fulfilled") {
-      const [symbol, data] = result.value;
-      quoteMap.set(symbol, data);
-      successCount += 1;
-      return;
-    }
-    failureCount += 1;
-    console.warn(`Quote refresh failed for ${symbols[index]}.`, result.reason);
-  });
-
-  if (!successCount) {
-    setInlineStatus("portfolioStatus", "Could not refresh quotes for any holdings.", "negative");
-    return;
-  }
-
-  const refreshedHoldings = holdings.map((holding) => {
-    const symbol = String(holding.symbol || "").trim().toUpperCase();
-    const quote = quoteMap.get(symbol);
-    if (!quote) {
-      return holding;
-    }
-
-    const currentPrice = Number(quote.price);
-    const previousClose = Number(quote.previousClose);
-    const quantity = Number(holding.quantity) || 0;
-    const initialValue = Number(holding.initialValue) || 0;
-    const currentValue = Number.isFinite(currentPrice) ? quantity * currentPrice : Number(holding.currentValue) || 0;
-    const dayChangePerShare = Number.isFinite(currentPrice) && Number.isFinite(previousClose) ? currentPrice - previousClose : 0;
-    const dayChange = quantity * dayChangePerShare;
-    const dayPercentChange = Number.isFinite(currentPrice) && Number.isFinite(previousClose) && previousClose !== 0
-      ? ((currentPrice - previousClose) / previousClose) * 100
-      : 0;
-
-    return {
-      ...holding,
-      asset: quote.name || holding.asset,
-      sector: quote.sector || holding.sector,
-      currentPrice: Number.isFinite(currentPrice) ? currentPrice : holding.currentPrice,
-      currentValue,
-      dayChange,
-      dayPercentChange,
-      unrealizedProfit: currentValue - initialValue,
-    };
-  });
-
-  const totalValue = refreshedHoldings.reduce((sum, holding) => sum + (Number(holding.currentValue) || 0), 0);
-  appState.portfolio.holdings = refreshedHoldings.map((holding) => ({
-    ...holding,
-    allocation: totalValue > 0 ? ((Number(holding.currentValue) || 0) / totalValue) * 100 : 0,
-  }));
-
-  persistPortfolioState();
-  renderPortfolio();
-
-  if (failureCount) {
-    setInlineStatus(
-      "portfolioStatus",
-      `Refreshed ${successCount} holding ${successCount === 1 ? "ticker" : "tickers"}. ${failureCount} failed.`,
-      "neutral",
-    );
-    return;
-  }
-
-  setInlineStatus(
-    "portfolioStatus",
-    `Refreshed quotes for ${successCount} holding ${successCount === 1 ? "ticker" : "tickers"}.`,
-    "positive",
-  );
+function setMobileNavOpen(open) {
+  const menuToggle = el("menuToggle");
+  const mobileNav = el("mobileNav");
+  const mobileNavBackdrop = el("mobileNavBackdrop");
+  if (!menuToggle || !mobileNav || !mobileNavBackdrop) return;
+  menuToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  mobileNav.hidden = !open;
+  mobileNavBackdrop.hidden = !open;
 }
 
-function deriveHoldingsFromTrades(trades) {
-  const holdingsMap = new Map();
-  trades.forEach((trade) => {
-    const key = `${trade.account}__${trade.symbol}`;
-    const quantity = Number(trade.quantity) || 0;
-    const signedQuantity = trade.side === "sell" ? -quantity : quantity;
-    const tradeValue = (Number(trade.tradePrice) || 0) * quantity;
-    if (!holdingsMap.has(key)) {
-      holdingsMap.set(key, {
-        account: trade.account,
-        symbol: trade.symbol,
-        asset: trade.asset,
-        sector: trade.sector,
-        quantity: 0,
-        totalCost: 0,
-        realizedProfit: 0,
-        currentPrice: Number(trade.tradePrice) || 0,
-        currentValue: 0,
-        dayChange: 0,
-        dayPercentChange: 0,
-        unrealizedProfit: 0,
-        allocation: 0,
-      });
-    }
-    const holding = holdingsMap.get(key);
-    if (trade.side === "buy") {
-      holding.quantity += quantity;
-      holding.totalCost += tradeValue + (Number(trade.fees) || 0);
-    } else {
-      const averageCost = holding.quantity > 0 ? holding.totalCost / holding.quantity : 0;
-      holding.quantity -= quantity;
-      holding.totalCost -= averageCost * quantity;
-      holding.realizedProfit += tradeValue - averageCost * quantity - (Number(trade.fees) || 0);
-    }
-    holding.asset = trade.asset || holding.asset;
-    holding.sector = trade.sector || holding.sector;
-    holding.currentPrice = Number(trade.tradePrice) || holding.currentPrice;
+function activateTab(tabId) {
+  document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === tabId));
+  document.querySelectorAll(".mobile-nav-link").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === tabId));
+  document.querySelectorAll(".panel").forEach((panel) => panel.classList.toggle("active", panel.id === tabId));
+  setMobileNavOpen(false);
+  resizeVisibleCharts();
+}
+
+function toggleCompareView(view) {
+  appState.compareView = view;
+  document.querySelectorAll("[data-compare-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.compareView === view);
+  });
+  el("compareHistoricalBlock").classList.toggle("active", view === "historical");
+  el("compareForwardBlock").classList.toggle("active", view === "forward");
+  resizeVisibleCharts();
+}
+
+function bindTabEvents() {
+  const handleTabClick = (button) => activateTab(button.dataset.tab);
+  document.querySelectorAll(".tab, .mobile-nav-link").forEach((button) => {
+    button.addEventListener("click", () => handleTabClick(button));
   });
 
-  const holdings = [...holdingsMap.values()]
-    .filter((holding) => holding.quantity > 0)
-    .map((holding) => {
-      const averageCost = holding.quantity > 0 ? holding.totalCost / holding.quantity : 0;
-      const currentValue = holding.quantity * holding.currentPrice;
-      const initialValue = holding.quantity * averageCost;
-      return {
-        ...holding,
-        averageCost,
-        initialValue,
-        currentValue,
-        unrealizedProfit: currentValue - initialValue,
-      };
+  el("menuToggle")?.addEventListener("click", () => {
+    const shouldOpen = el("menuToggle").getAttribute("aria-expanded") !== "true";
+    setMobileNavOpen(shouldOpen);
+  });
+
+  el("mobileNavBackdrop")?.addEventListener("click", () => setMobileNavOpen(false));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      setMobileNavOpen(false);
+    }
+  });
+}
+
+function bindChartControls() {
+  document.querySelectorAll("[data-chart-mode-target]").forEach((group) => {
+    group.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-mode]");
+      if (!button) return;
+      const chartKey = group.dataset.chartModeTarget;
+      group.querySelectorAll(".segmented-button").forEach((node) => node.classList.remove("active"));
+      button.classList.add("active");
+      updateChartMode(chartKey, button.dataset.mode);
     });
+  });
 
-  const totalValue = holdings.reduce((sum, holding) => sum + holding.currentValue, 0);
-  return holdings.map((holding) => ({
-    ...holding,
-    allocation: totalValue > 0 ? (holding.currentValue / totalValue) * 100 : 0,
-  }));
+  document.querySelectorAll("[data-chart-reset]").forEach((button) => {
+    button.addEventListener("click", () => resetChartView(button.dataset.chartReset));
+  });
+
+  document.querySelectorAll("[data-chart-range-target]").forEach((group) => {
+    group.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-range]");
+      if (!button) return;
+      const chartKey = group.dataset.chartRangeTarget;
+      group.querySelectorAll(".segmented-button").forEach((node) => node.classList.remove("active"));
+      button.classList.add("active");
+
+      if (chartKey === "projectionHistorical") {
+        appState.projectionHistoryRange = button.dataset.range;
+        await loadProjectionHistoricalChart(el("ticker").value, appState.projectionHistoryRange);
+      } else if (chartKey === "compareHistorical") {
+        appState.compareHistoryRange = button.dataset.range;
+        await loadCompareHistoricalChart(appState.compareHistoryRange);
+      }
+    });
+  });
 }
 
-function getPortfolioWorkbookData() {
-  return {
-    trades: appState.portfolio.trades.map((trade) => ({
-      Date: trade.date,
-      Symbol: trade.symbol,
-      Asset: trade.asset,
-      Sector: trade.sector,
-      Side: trade.side,
-      Quantity: trade.quantity,
-      "Trade Price": trade.tradePrice,
-      Fees: trade.fees,
-      Account: trade.account,
-      Notes: trade.notes,
-    })),
-    holdings: appState.portfolio.holdings.map((holding) => ({
-      Symbol: holding.symbol,
-      Asset: holding.asset,
-      Sector: holding.sector,
-      Quantity: holding.quantity,
-      "Average Cost": holding.averageCost,
-      "Initial Value": holding.initialValue,
-      Account: holding.account,
-    })),
-  };
+function bindWatchlistActions() {
+  el("watchlistGrid").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-watch-action]");
+    if (!button) return;
+    const index = Number(button.dataset.watchIndex);
+    const item = appState.watchlist[index];
+    if (!item) return;
+
+    if (button.dataset.watchAction === "load") {
+      restoreProjectionInputs(item.inputs);
+      runProjection();
+      activateTab("projection");
+      setInlineStatus("projectionSaveStatus", `${item.ticker} loaded from watchlist.`, "positive");
+    } else if (button.dataset.watchAction === "delete") {
+      appState.watchlist.splice(index, 1);
+      persistWatchlist();
+      renderWatchlist();
+    }
+  });
+
+  el("watchlistGrid").addEventListener("input", (event) => {
+    const field = event.target.closest("[data-watch-note]");
+    if (!field) return;
+    const index = Number(field.dataset.watchNote);
+    const item = appState.watchlist[index];
+    if (!item) return;
+    item.notes = field.value;
+    persistWatchlist();
+    setInlineStatus("watchlistStatus", `Notes saved for ${item.ticker}.`, "positive");
+  });
 }
 
-function runProjectionWrapper() {
-  const result = calculateProjection(readProjectionInputs());
-  renderProjection(result);
-  return result;
+function bindPortfolioActions() {
+  if (!el("tradeForm")) return;
+  el("tradeForm").addEventListener("submit", handleTradeSubmit);
+  el("resetTradeForm").addEventListener("click", resetTradeForm);
+  el("connectDriveButton").addEventListener("click", connectDrive);
+  el("disconnectDriveButton").addEventListener("click", () => {
+    disconnectDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
+  });
+  el("syncPortfolioNowButton").addEventListener("click", () => {
+    syncPortfolioToDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
+  });
+  el("loadDrivePortfolioButton").addEventListener("click", () => {
+    loadPortfolioFromDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
+  });
+  el("reloadRemotePortfolioButton").addEventListener("click", () => {
+    loadPortfolioFromDrive().catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
+  });
+  el("forceOverwriteRemoteButton").addEventListener("click", () => {
+    syncPortfolioToDrive({ force: true }).catch((error) => setInlineStatus("portfolioStatus", error.message, "negative"));
+  });
+  el("downloadPortfolioTemplate").addEventListener("click", downloadPortfolioTemplate);
+  el("importPortfolioButton").addEventListener("click", () => el("portfolioFileInput").click());
+  el("exportPortfolioButton").addEventListener("click", exportPortfolioWorkbook);
+  el("exportTradesCsvButton").addEventListener("click", exportTradesCsv);
+  el("refreshPortfolioQuotes").addEventListener("click", refreshPortfolioQuotes);
+  el("runPortfolioProjection").addEventListener("click", () => {
+    runPortfolioProjection().catch((error) => setInlineStatus("portfolioProjectionStatus", error.message, "negative"));
+  });
+
+  el("portfolioFileInput").addEventListener("change", async (event) => {
+    const [file] = event.target.files || [];
+    if (!file) return;
+    try {
+      const imported = await importPortfolioWorkbook(file);
+      appState.portfolio.trades = imported.trades;
+      appState.portfolio.holdings = imported.trades.length
+        ? deriveHoldingsFromTrades(imported.trades, false)
+        : imported.holdings.map(normalizePortfolioHolding);
+      appState.portfolioProjection = null;
+      queuePortfolioDriveSync();
+      renderPortfolio();
+      setInlineStatus(
+        "portfolioStatus",
+        appState.driveAuth.connected
+          ? "Workbook imported and queued for Drive sync. Pull latest info to add current quotes."
+          : "Workbook imported locally. Connect Drive to make it permanent across devices.",
+        "positive",
+      );
+    } catch (error) {
+      setInlineStatus("portfolioStatus", error.message, "negative");
+    } finally {
+      event.target.value = "";
+    }
+  });
+
+  el("portfolioTradesTable").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-trade-action]");
+    if (!button) return;
+    const tradeId = button.dataset.tradeId;
+    if (button.dataset.tradeAction === "edit") {
+      editTrade(tradeId);
+    } else if (button.dataset.tradeAction === "delete") {
+      deleteTrade(tradeId);
+    }
+  });
+}
+
+function bindEvents() {
+  bindTabEvents();
+  bindChartControls();
+  bindWatchlistActions();
+  bindPortfolioActions();
+
+  el("projectionForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    runProjection();
+    await loadProjectionHistoricalChart(el("ticker").value, appState.projectionHistoryRange).catch(() => {});
+  });
+
+  [
+    "ticker",
+    "currentPrice",
+    "revenue",
+    "shares",
+    "eps",
+    "years",
+    "bearGrowth",
+    "bearMargin",
+    "bearPe",
+    "baseGrowth",
+    "baseMargin",
+    "basePe",
+    "bullGrowth",
+    "bullMargin",
+    "bullPe",
+  ].forEach((id) => {
+    el(id).addEventListener("input", () => {
+      runProjection();
+    });
+  });
+
+  el("saveProjection").addEventListener("click", saveProjection);
+  el("fetchTicker").addEventListener("click", fetchProjectionTicker);
+  el("runCompare").addEventListener("click", async () => {
+    runCompare();
+    await loadCompareHistoricalChart(appState.compareHistoryRange).catch(() => {});
+  });
+  el("fetchCompare").addEventListener("click", fetchCompareTickers);
+  el("runReverse").addEventListener("click", runReverse);
+  el("runMos").addEventListener("click", runMos);
+  el("sp500Form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    renderSp500();
+  });
+  el("clearWatchlist").addEventListener("click", () => {
+    appState.watchlist = [];
+    persistWatchlist();
+    renderWatchlist();
+  });
+  el("useCurrentForA").addEventListener("click", () => {
+    const input = readProjectionInputs();
+    el("compareATicker").value = input.ticker;
+    el("compareAPrice").value = input.currentPrice;
+    el("compareAEps").value = input.eps;
+    el("compareAGrowth").value = (input.cases.base.growth * 100).toFixed(1);
+    el("compareAPe").value = input.cases.base.pe;
+    runCompare();
+  });
+  el("compareViewToggle").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-compare-view]");
+    if (!button) return;
+    toggleCompareView(button.dataset.compareView);
+  });
 }
 
 function runProjection() {
-  return runProjectionWrapper();
+  const result = calculateProjection(readProjectionInputs());
+  renderProjection(result);
+  return result;
 }
 
 async function seedPortfolioIfEmpty() {
@@ -2174,15 +2510,19 @@ async function init() {
   runMos();
   renderSp500();
   renderWatchlist();
-  if (!appState.portfolio.holdings.length) {
-    appState.portfolio.holdings = deriveHoldingsFromTrades(appState.portfolio.trades, false);
-  }
-  renderPortfolio();
-  if (appState.driveAuth.connected && !appState.portfolio.trades.length) {
-    try {
-      await loadPortfolioFromDrive();
-    } catch {
-      renderPortfolioSyncState();
+  if (el("portfolio")) {
+    if (!appState.portfolio.holdings.length) {
+      appState.portfolio.holdings = appState.portfolio.trades.length
+        ? deriveHoldingsFromTrades(appState.portfolio.trades, false)
+        : (appState.portfolio.holdings || []).map(normalizePortfolioHolding);
+    }
+    renderPortfolio();
+    if (appState.driveAuth.connected && !appState.portfolio.trades.length && !appState.portfolio.holdings.length) {
+      try {
+        await loadPortfolioFromDrive();
+      } catch {
+        renderPortfolioSyncState();
+      }
     }
   }
   toggleCompareView("historical");
