@@ -183,6 +183,10 @@
             <div class="tool-panel">
               <div class="section-heading">
                 <h2>Compare Two Stocks</h2>
+                <div class="heading-actions">
+                  <button class="ghost-button" id="fetchCompareVisible" type="button">Fetch A &amp; B</button>
+                  <button class="ghost-button" id="useCurrentForA" type="button">Use current projection as A</button>
+                </div>
               </div>
               <div class="two-col">
                 <div class="mini-form" data-compare="A">
@@ -237,9 +241,7 @@
                 <input id="compareYears" type="number" min="1" max="15" value="5" />
               </label>
               <div class="button-row">
-                <button class="ghost-button" id="fetchCompareVisible" type="button">Fetch A &amp; B</button>
                 <button class="ghost-button" id="fetchCompare" type="button">Fetch A &amp; B</button>
-                <button class="ghost-button" id="useCurrentForA" type="button">Use current projection as A</button>
                 <button class="primary-button" id="runCompare" type="button">Compare projections</button>
               </div>
             </div>
