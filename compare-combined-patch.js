@@ -274,11 +274,16 @@
   }
 
   function wireCompareActions() {
-    bindCompareButton("fetchCompare", async () => {
+    const fetchCompareHandler = async () => {
       const button = byId("fetchCompare");
+      const visibleButton = byId("fetchCompareVisible");
       if (button) {
         button.disabled = true;
         button.textContent = "Fetching...";
+      }
+      if (visibleButton) {
+        visibleButton.disabled = true;
+        visibleButton.textContent = "Fetching...";
       }
 
       try {
@@ -330,8 +335,15 @@
           button.disabled = false;
           button.textContent = "Fetch A & B";
         }
+        if (visibleButton) {
+          visibleButton.disabled = false;
+          visibleButton.textContent = "Fetch A & B";
+        }
       }
-    });
+    };
+
+    bindCompareButton("fetchCompare", fetchCompareHandler);
+    bindCompareButton("fetchCompareVisible", fetchCompareHandler);
 
     bindCompareButton("runCompare", async () => {
       if (typeof runCompare === "function") {
