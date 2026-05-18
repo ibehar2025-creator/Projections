@@ -13,6 +13,12 @@
     return copy.getTime();
   }
 
+  function toTimestamp(value) {
+    if (typeof value === "number") return value;
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : Date.now();
+  }
+
   function installRangeButtons() {
     const toolbar = byId("projectionForwardChart")?.closest(".chart-card")?.querySelector(".chart-toolbar");
     if (!toolbar || toolbar.querySelector('[data-chart-range-target="projectionHistorical"]')) return;
@@ -109,8 +115,7 @@
             y: point.price,
           })),
         ],
-        pointRadius: 0,
-        pointHitRadius: 18,
+        pointRadius: 2,
         pointHoverRadius: 4,
         borderWidth: item.key === "base" ? 2.8 : 2.2,
         fill: false,
@@ -839,6 +844,12 @@
     return copy.getTime();
   }
 
+  function toTimestamp(value) {
+    if (typeof value === "number") return value;
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : Date.now();
+  }
+
   function removeManualCompareUi() {
     byId("compareViewToggle")?.remove();
     byId("compareForwardBlock")?.remove();
@@ -875,7 +886,7 @@
     const datasets = histories.flatMap(({ color, history, projection }) => {
       const firstClose = history.points.find((point) => Number.isFinite(point.close))?.close || 1;
       const historySeries = history.points.map((point) => ({
-        x: point.date,
+        x: toTimestamp(point.date),
         y: (point.close / firstClose) * 100,
       }));
       const anchor = historySeries[historySeries.length - 1];
@@ -903,13 +914,12 @@
         {
           label: `${history.symbol} projection`,
           borderColor: color,
-          backgroundColor: `${color}16`,
+          backgroundColor: `${color}1f`,
           borderDash: [8, 5],
           data: projectionSeries,
-          pointRadius: 0,
-          pointHitRadius: 18,
-          pointHoverRadius: 4,
-          borderWidth: 2.2,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          borderWidth: 2.8,
         },
       ];
     });
