@@ -65,15 +65,23 @@
 }
 
 #compare .two-col {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 #compare .wide-label {
-  margin-top: 4px;
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  justify-items: start;
+}
+
+#compare .wide-label input {
+  max-width: 180px;
 }
 
 #compare .button-row {
-  margin-top: 14px;
+  margin-top: 16px;
+  justify-content: flex-start;
   row-gap: 10px;
 }
 
@@ -111,8 +119,14 @@
     min-width: 0;
   }
 
+  #compare .wide-label {
+    justify-items: stretch;
+  }
+
+  #compare .wide-label input,
   #compare #runCompare {
     width: 100%;
+    max-width: none;
     min-width: 0;
   }
 }
