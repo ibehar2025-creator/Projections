@@ -19,10 +19,31 @@ const PORTFOLIO_SPREADSHEET_TABS = ["Total Holdings", "Holdings"];
 const SESSION_COOKIE = "stocklab_drive_session";
 const STATE_COOKIE = "stocklab_drive_state";
 
+function securityHeaders() {
+  return {
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Content-Security-Policy":
+      "default-src 'self'; " +
+      "base-uri 'self'; " +
+      "object-src 'none'; " +
+      "frame-ancestors 'none'; " +
+      "form-action 'self'; " +
+      "img-src 'self' data: https:; " +
+      "font-src 'self' https://fonts.gstatic.com data:; " +
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; " +
+      "connect-src 'self';",
+  };
+}
+
 function sendJson(res, status, data) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
+    ...securityHeaders(),
   });
   res.end(JSON.stringify(data));
 }
@@ -31,6 +52,7 @@ function redirect(res, location, headers = {}) {
   res.writeHead(302, {
     Location: location,
     "Cache-Control": "no-store",
+    ...securityHeaders(),
     ...headers,
   });
   res.end();
