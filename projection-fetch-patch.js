@@ -10,6 +10,15 @@
     return Boolean(node && /AAPL|MSFT|Apple|Microsoft/i.test(node.textContent || ""));
   }
 
+  function setProjectionReadout(message) {
+    if (typeof setChartReadout === "function") {
+      setChartReadout("projectionForwardReadout", message);
+      return;
+    }
+    const readout = byId("projectionForwardReadout");
+    if (readout) readout.textContent = message;
+  }
+
   function clearExampleTickerUi() {
     [
       ["ticker", "Enter ticker"],
@@ -60,20 +69,71 @@
     }
   }
 
+  async function runProjectionSafely({ fetchHistory = true } = {}) {
+    if (typeof runProjection !== "function") return;
+
+    const ticker = String(byId("ticker")?.value || "").trim().toUpperCase();
+    runProjection();
+
+    if (!fetchHistory || !ticker || typeof loadProjectionHistoricalChart !== "function") {
+      setProjectionReadout(ticker ? "Projection updated. Fetch live data to refresh the price path." : "Projection updated. Enter a ticker and fetch live data to load the price path.");
+      return;
+    }
+
+    try {
+      await loadProjectionHistoricalChart(ticker, appState?.projectionHistoryRange || "5y");
+    } catch (error) {
+      setProjectionReadout(error.message || "Projection updated, but price history could not load.");
+    }
+  }
+
+  function bindProjectionRun() {
+    const form = byId("projectionForm");
+    const button =
+      form?.querySelector('button[type="submit"]') ||
+      [...document.querySelectorAll("#projection button")].find((candidate) => candidate.textContent.trim() === "Run projection");
+
+    if (form && form.dataset.projectionRunPatchBound !== "true") {
+      form.dataset.projectionRunPatchBound = "true";
+      form.addEventListener(
+        "submit",
+        (event) => {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          void runProjectionSafely();
+        },
+        true,
+      );
+    }
+
+    if (button && button.dataset.projectionRunPatchBound !== "true") {
+      button.dataset.projectionRunPatchBound = "true";
+      button.type = "button";
+      button.addEventListener(
+        "click",
+        (event) => {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          void runProjectionSafely();
+        },
+        true,
+      );
+    }
+  }
+
   function bindProjectionFetch() {
     const button = byId("fetchTicker");
-    if (!button || !button.parentNode) return;
+    if (!button || !button.parentNode || button.dataset.projectionFetchPatchBound === "true") return;
 
-    const replacement = button.cloneNode(true);
-    button.parentNode.replaceChild(replacement, button);
-    replacement.addEventListener(
+    button.dataset.projectionFetchPatchBound = "true";
+    button.addEventListener(
       "click",
       async (event) => {
         event.preventDefault();
         event.stopImmediatePropagation();
 
-        replacement.disabled = true;
-        replacement.textContent = "Fetching...";
+        button.disabled = true;
+        button.textContent = "Fetching...";
         if (typeof setDataStatus === "function") {
           setDataStatus("Fetching live data");
         }
@@ -84,11 +144,9 @@
           if (typeof applyStockDataToProjection === "function") {
             applyStockDataToProjection(data);
           }
-          if (typeof runProjection === "function") {
-            runProjection();
-          }
+          await runProjectionSafely({ fetchHistory: false });
           if (typeof loadProjectionHistoricalChart === "function") {
-            await loadProjectionHistoricalChart(data.symbol, appState.projectionHistoryRange || "5y");
+            await loadProjectionHistoricalChart(data.symbol, appState?.projectionHistoryRange || "5y");
           }
         } catch (error) {
           if (typeof setDataStatus === "function") {
@@ -99,19 +157,23 @@
             card.innerHTML = `<strong>Could not load data.</strong><p>${error.message || "Request failed."}</p>`;
           }
         } finally {
-          replacement.disabled = false;
-          replacement.textContent = "Fetch live data";
+          button.disabled = false;
+          button.textContent = "Fetch live data";
         }
       },
       true,
     );
   }
 
-  clearExampleTickerUi();
-  bindProjectionFetch();
-  setTimeout(clearExampleTickerUi, 0);
-  setTimeout(bindProjectionFetch, 0);
-  setTimeout(clearExampleTickerUi, 500);
-  setTimeout(clearExampleTickerUi, 1500);
-  setTimeout(clearExampleTickerUi, 3000);
+  function bootstrapProjectionPatch() {
+    clearExampleTickerUi();
+    bindProjectionRun();
+    bindProjectionFetch();
+  }
+
+  bootstrapProjectionPatch();
+  setTimeout(bootstrapProjectionPatch, 0);
+  setTimeout(bootstrapProjectionPatch, 500);
+  setTimeout(bootstrapProjectionPatch, 1500);
+  setTimeout(bootstrapProjectionPatch, 3000);
 })();
