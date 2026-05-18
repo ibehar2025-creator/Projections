@@ -19,13 +19,13 @@
     return Number.isFinite(time) ? time : Date.now();
   }
 
-  function forceComparePanMode() {
+  function ensureCompareMeasureMode() {
     const modeGroup = document.querySelector('[data-chart-mode-target="compareHistorical"]');
     if (modeGroup) {
-      modeGroup.innerHTML = '<button class="segmented-button active" type="button" data-mode="pan">Pan</button>';
-      modeGroup.onclick = () => updateChartMode("compareHistorical", "pan");
+      modeGroup.innerHTML = '<button class="segmented-button active" type="button" data-mode="measure">Measure</button>';
+      modeGroup.onclick = () => updateChartMode("compareHistorical", "measure");
     }
-    updateChartMode("compareHistorical", "pan");
+    updateChartMode("compareHistorical", "measure");
   }
 
   function normalizeCompareUi() {
@@ -46,7 +46,7 @@
         "Each stock shows normalized history first, then its forward projection continues from the latest point.";
     }
 
-    forceComparePanMode();
+    ensureCompareMeasureMode();
   }
 
   function drawCombinedCompareChart() {
@@ -109,7 +109,7 @@
       readoutId: "compareHistoricalReadout",
       xFormatter: (value) => formatDate(value),
       xTime: true,
-      mode: "pan",
+      mode: "measure",
       datasets,
     });
 
@@ -130,7 +130,7 @@
       chart.update("none");
     }
 
-    forceComparePanMode();
+    ensureCompareMeasureMode();
     setChartReadout(
       "compareHistoricalReadout",
       `${historical.a.symbol} and ${historical.b.symbol} now share one chart: normalized ${historical.a.rangeLabel} history followed by forward projection paths.`,
@@ -189,9 +189,49 @@
     toggleCompareView = patchedToggleCompareView;
   }
 
+  function bindCompareButton(buttonId, handler) {
+    const button = byId(buttonId);
+    if (!button || !button.parentNode) return;
+    const replacement = button.cloneNode(true);
+    button.parentNode.replaceChild(replacement, button);
+    replacement.addEventListener("click", handler);
+  }
+
+  function wireCompareActions() {
+    bindCompareButton("fetchCompare", async () => {
+      if (typeof fetchCompareTickers === "function") {
+        await fetchCompareTickers();
+      }
+    });
+
+    bindCompareButton("runCompare", async () => {
+      if (typeof runCompare === "function") {
+        runCompare();
+      }
+      if (typeof loadCompareHistoricalChart === "function") {
+        await loadCompareHistoricalChart(appState.compareHistoryRange || "5y").catch(() => {});
+      }
+    });
+
+    bindCompareButton("useCurrentForA", () => {
+      if (typeof readProjectionInputs !== "function") return;
+      const input = readProjectionInputs();
+      if (byId("compareATicker")) byId("compareATicker").value = input.ticker;
+      if (byId("compareAPrice")) byId("compareAPrice").value = input.currentPrice;
+      if (byId("compareAEps")) byId("compareAEps").value = input.eps;
+      if (byId("compareAGrowth")) byId("compareAGrowth").value = (input.cases.base.growth * 100).toFixed(1);
+      if (byId("compareAPe")) byId("compareAPe").value = input.cases.base.pe;
+      if (typeof runCompare === "function") {
+        runCompare();
+      }
+    });
+  }
+
   normalizeCompareUi();
+  wireCompareActions();
   setTimeout(() => {
     normalizeCompareUi();
+    wireCompareActions();
     drawCombinedCompareChart();
   }, 0);
 })();
