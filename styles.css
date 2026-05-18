@@ -176,10 +176,6 @@ h3 {
   display: none;
 }
 
-.mobile-nav[hidden] {
-  display: none !important;
-}
-
 .mobile-nav-link {
   width: 100%;
   min-height: 46px;
@@ -247,9 +243,12 @@ h3 {
   align-items: start;
 }
 
-.workspace-grid,
-.compare-layout {
+.workspace-grid {
   grid-template-columns: minmax(360px, 0.9fr) minmax(440px, 1.1fr);
+}
+
+.compare-layout {
+  grid-template-columns: minmax(300px, 0.95fr) minmax(260px, 0.8fr) minmax(420px, 1.25fr);
 }
 
 .portfolio-grid {
@@ -311,18 +310,6 @@ h3 {
   gap: 12px;
 }
 
-.section-heading {
-  align-items: flex-start;
-  margin-bottom: 16px;
-}
-
-.results-panel > .section-heading .small-muted {
-  display: block;
-  max-width: 24ch;
-  text-align: right;
-  line-height: 1.45;
-}
-
 .chart-header,
 .portfolio-header,
 .watchlist-header {
@@ -333,14 +320,9 @@ h3 {
 .chart-toolbar,
 .button-row {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   align-items: center;
-}
-
-.heading-actions,
-.button-row {
-  margin-top: 14px;
 }
 
 .input-grid,
@@ -359,7 +341,7 @@ h3 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-two-col,
+.two-col,
 .chart-grid-two {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -368,12 +350,16 @@ two-col,
   grid-template-columns: repeat(3, minmax(280px, 1fr));
 }
 
-.details-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+.compare-chart-card {
+  min-height: 100%;
 }
 
-.results-panel .details-grid {
-  margin-top: 12px;
+.compare-chart-card .chart-shell {
+  min-height: 320px;
+}
+
+.details-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .chart-stack,
@@ -510,7 +496,6 @@ textarea:focus {
   font-weight: 700;
   cursor: pointer;
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, opacity 0.16s ease;
-  white-space: nowrap;
 }
 
 .primary-button {
@@ -589,8 +574,6 @@ textarea:focus {
 .detail-card,
 .watch-card {
   padding: 14px;
-  min-width: 0;
-  overflow: hidden;
 }
 
 .metric-card span,
@@ -608,13 +591,10 @@ textarea:focus {
   display: block;
   margin: 8px 0 4px;
   line-height: 1.08;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
 .metric-card strong {
-  font-size: clamp(1rem, 1.2vw + 0.9rem, 2rem);
+  font-size: clamp(1.28rem, 2vw, 2rem);
 }
 
 .hero-card {
@@ -718,7 +698,7 @@ textarea:focus {
   background: rgba(12, 18, 28, 0.78);
 }
 
-.detail-card strong {
+detail-card strong {
   font-size: 1rem;
 }
 
@@ -895,36 +875,6 @@ textarea:focus {
   align-items: flex-start;
 }
 
-.portfolio-header {
-  display: grid;
-  gap: 12px;
-}
-
-.portfolio-toolbar {
-  display: grid;
-  gap: 12px;
-  width: 100%;
-}
-
-.portfolio-toolbar-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-}
-
-.portfolio-toolbar-group > * {
-  flex: 0 0 auto;
-}
-
-.portfolio-toolbar-group-primary {
-  justify-content: flex-end;
-}
-
-.portfolio-toolbar-group-primary .primary-button {
-  min-width: 156px;
-}
-
 .trade-form .input-grid {
   margin-bottom: 12px;
 }
@@ -1042,16 +992,13 @@ textarea:focus {
     left: 10px;
     right: 10px;
     z-index: 21;
+    display: grid;
     gap: 8px;
     padding: 12px;
     border: 1px solid var(--line);
     border-radius: 12px;
     background: rgba(12, 19, 30, 0.98);
     box-shadow: var(--shadow);
-  }
-
-  .mobile-nav:not([hidden]) {
-    display: grid;
   }
 
   .tab {
@@ -1075,11 +1022,6 @@ textarea:focus {
   .chart-grid-two,
   .tools-grid {
     grid-template-columns: 1fr;
-  }
-
-  .results-panel > .section-heading .small-muted {
-    max-width: none;
-    text-align: left;
   }
 
   .heading-actions,
@@ -1217,20 +1159,6 @@ textarea:focus {
     width: 100%;
   }
 
-  .portfolio-toolbar-group {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .portfolio-toolbar-group > * {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .portfolio-toolbar-group-primary {
-    grid-template-columns: 1fr;
-  }
-
   .watch-card dl {
     grid-template-columns: 1fr;
     gap: 8px;
@@ -1276,10 +1204,6 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
-  .portfolio-toolbar-group {
-    grid-template-columns: 1fr;
-  }
-
   input,
   select {
     height: 40px;
@@ -1287,7 +1211,7 @@ textarea:focus {
   }
 
   .metric-card strong {
-    font-size: clamp(0.95rem, 3.8vw, 1.4rem);
+    font-size: 1.4rem;
   }
 
   .chart-shell {
