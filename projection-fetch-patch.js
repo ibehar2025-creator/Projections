@@ -6,6 +6,10 @@
     return document.getElementById(id);
   }
 
+  function hasExampleTickerText(node) {
+    return Boolean(node && /AAPL|MSFT|Apple|Microsoft/i.test(node.textContent || ""));
+  }
+
   function clearExampleTickerUi() {
     [
       ["ticker", "Enter ticker"],
@@ -29,24 +33,29 @@
     });
 
     const stockCard = byId("stockDataCard");
-    if (stockCard && /AAPL|MSFT|Apple|Microsoft/i.test(stockCard.textContent || "")) {
+    if (hasExampleTickerText(stockCard)) {
       stockCard.innerHTML = "<strong>Live data not loaded yet.</strong><p>Enter a ticker and fetch market data to fill the projection inputs automatically.</p>";
     }
 
     const projectionCards = byId("projectionCards");
     const projectionDetails = byId("projectionDetails");
-    if (projectionCards && /AAPL|MSFT|Apple|Microsoft/i.test(projectionCards.textContent || "")) projectionCards.innerHTML = "";
-    if (projectionDetails && /AAPL|MSFT|Apple|Microsoft/i.test(projectionDetails.textContent || "")) projectionDetails.innerHTML = "";
+    if (hasExampleTickerText(projectionCards)) projectionCards.innerHTML = "";
+    if (hasExampleTickerText(projectionDetails)) projectionDetails.innerHTML = "";
+
+    const projectionReadout = byId("projectionForwardReadout");
+    if (hasExampleTickerText(projectionReadout)) {
+      projectionReadout.textContent = "Enter a ticker and fetch live data to load the price path.";
+    }
 
     const compareCards = byId("compareCards");
-    if (compareCards && /AAPL|MSFT|Apple|Microsoft/i.test(compareCards.textContent || "")) compareCards.innerHTML = "";
+    if (hasExampleTickerText(compareCards)) compareCards.innerHTML = "";
 
     const compareHistoricalReadout = byId("compareHistoricalReadout");
     const compareForwardReadout = byId("compareForwardReadout");
-    if (compareHistoricalReadout && /AAPL|MSFT|Apple|Microsoft/i.test(compareHistoricalReadout.textContent || "")) {
+    if (hasExampleTickerText(compareHistoricalReadout)) {
       compareHistoricalReadout.textContent = "Enter two tickers and fetch A & B to load the comparison.";
     }
-    if (compareForwardReadout && /AAPL|MSFT|Apple|Microsoft/i.test(compareForwardReadout.textContent || "")) {
+    if (hasExampleTickerText(compareForwardReadout)) {
       compareForwardReadout.textContent = "Forward comparison details will appear here.";
     }
   }
@@ -103,4 +112,6 @@
   setTimeout(clearExampleTickerUi, 0);
   setTimeout(bindProjectionFetch, 0);
   setTimeout(clearExampleTickerUi, 500);
+  setTimeout(clearExampleTickerUi, 1500);
+  setTimeout(clearExampleTickerUi, 3000);
 })();
