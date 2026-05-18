@@ -43,13 +43,17 @@ const historyRangeConfig = {
 
 const quoteCache = new Map();
 const QUOTE_CACHE_TTL_MS = 60_000;
+const symbolAliases = new Map([
+  ["APPL", "AAPL"],
+]);
 
 function cleanSymbol(symbol) {
-  return String(symbol || "")
+  const cleaned = String(symbol || "")
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9.-]/g, "")
     .slice(0, 12);
+  return symbolAliases.get(cleaned) || cleaned;
 }
 
 function yahooSymbol(symbol) {
