@@ -11,7 +11,7 @@
       rel="stylesheet"
     />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-    <link rel="stylesheet" href="styles.css?v=8" />
+    <link rel="stylesheet" href="styles.css?v=7" />
     <style>
       .two-col,
       .chart-grid-two {
@@ -47,16 +47,12 @@
         <button class="tab active" data-tab="projection">Projection</button>
         <button class="tab" data-tab="compare">Compare</button>
         <button class="tab" data-tab="valuation">Calculators</button>
-        <button class="tab" data-tab="watchlist">Watchlist</button>
-        <button class="tab" data-tab="portfolio">Portfolio</button>
       </nav>
       <div class="mobile-nav-backdrop" id="mobileNavBackdrop" hidden></div>
       <nav class="mobile-nav" id="mobileNav" aria-label="Mobile stock tools" hidden>
         <button class="mobile-nav-link active" data-tab="projection" type="button">Projection</button>
         <button class="mobile-nav-link" data-tab="compare" type="button">Compare</button>
         <button class="mobile-nav-link" data-tab="valuation" type="button">Calculators</button>
-        <button class="mobile-nav-link" data-tab="watchlist" type="button">Watchlist</button>
-        <button class="mobile-nav-link" data-tab="portfolio" type="button">Portfolio</button>
       </nav>
 
       <main>
@@ -65,6 +61,9 @@
             <form class="tool-panel" id="projectionForm">
               <div class="section-heading">
                 <h2>Scenario Inputs</h2>
+                <div class="heading-actions">
+                  <button class="ghost-button" type="button" id="fetchTicker">Fetch live data</button>
+                </div>
               </div>
 
               <div class="input-grid">
@@ -135,7 +134,7 @@
 
               <div class="data-card" id="stockDataCard">
                 <strong>Live data not loaded yet.</strong>
-                <p>Enter a ticker to load market data and fill the projection inputs automatically.</p>
+                <p>Enter a ticker and fetch market data to fill the projection inputs automatically.</p>
               </div>
             </form>
 
@@ -419,210 +418,10 @@
           </div>
         </section>
 
-        <section class="panel" id="watchlist">
-          <div class="watchlist-header">
-            <div>
-              <h2>Saved Projections</h2>
-              <p class="small-muted">Open a saved setup, keep notes on each idea, or remove it if you no longer need to track it.</p>
-            </div>
-            <button class="secondary-button" id="clearWatchlist" type="button">Clear watchlist</button>
-          </div>
-          <p class="inline-status" id="watchlistStatus"></p>
-          <div class="watchlist-grid" id="watchlistGrid"></div>
-        </section>
-
-        <section class="panel" id="portfolio">
-          <div class="portfolio-header">
-            <div class="portfolio-toolbar">
-              <div class="portfolio-toolbar-group">
-                <button class="ghost-button" id="connectDriveButton" type="button">Connect Drive</button>
-                <button class="ghost-button" id="syncPortfolioNowButton" type="button">Sync now</button>
-                <button class="ghost-button" id="loadDrivePortfolioButton" type="button">Load Drive copy</button>
-                <button class="ghost-button" id="disconnectDriveButton" type="button">Disconnect</button>
-              </div>
-              <div class="portfolio-toolbar-group">
-                <button class="ghost-button" id="downloadPortfolioTemplate" type="button">Template</button>
-                <button class="ghost-button" id="importPortfolioButton" type="button">Import workbook</button>
-                <button class="ghost-button" id="exportPortfolioButton" type="button">Export workbook</button>
-                <button class="ghost-button" id="exportTradesCsvButton" type="button">Export trades CSV</button>
-              </div>
-              <div class="portfolio-toolbar-group portfolio-toolbar-group-primary">
-                <button class="primary-button" id="refreshPortfolioQuotes" type="button">Pull latest info</button>
-              </div>
-            </div>
-            <input id="portfolioFileInput" type="file" accept=".xlsx,.xls,.csv" hidden />
-          </div>
-
-          <p class="inline-status" id="portfolioStatus"></p>
-          <div class="portfolio-hero-grid" id="portfolioHero"></div>
-
-          <div class="portfolio-dashboard-grid">
-            <article class="chart-card portfolio-projection-panel">
-              <div class="section-heading">
-                <div>
-                  <h2>Full Portfolio Projection</h2>
-                  <p class="small-muted">Runs bear, base, and bull projections across every holding and rolls them into one view.</p>
-                </div>
-                <button class="primary-button" id="runPortfolioProjection" type="button">Run full portfolio projection</button>
-              </div>
-              <p class="inline-status" id="portfolioProjectionStatus"></p>
-              <div class="metric-row" id="portfolioProjectionCards"></div>
-              <div class="portfolio-scenario-grid" id="portfolioProjectionScenarios"></div>
-            </article>
-
-            <article class="table-card">
-              <div class="portfolio-spotlight-grid" id="portfolioSpotlight"></div>
-            </article>
-          </div>
-
-          <div class="data-card">
-            <strong>Portfolio Sync</strong>
-            <p id="portfolioSyncMeta">Checking private Drive sync status...</p>
-            <div class="button-row" id="portfolioConflictActions" hidden>
-              <button class="secondary-button" id="reloadRemotePortfolioButton" type="button">Load newer Drive copy</button>
-              <button class="secondary-button" id="forceOverwriteRemoteButton" type="button">Overwrite Drive copy</button>
-            </div>
-          </div>
-
-          <div class="metric-row" id="portfolioCards"></div>
-
-          <div class="portfolio-grid">
-            <article class="tool-panel">
-              <div class="section-heading">
-                <h2>Trade Entry</h2>
-                <span class="small-muted">The Trades sheet is the source of truth.</span>
-              </div>
-              <form id="tradeForm" class="trade-form">
-                <div class="input-grid">
-                  <label>
-                    Date
-                    <input id="tradeDate" type="date" />
-                  </label>
-                  <label>
-                    Symbol
-                    <input id="tradeSymbol" maxlength="12" placeholder="AAPL" />
-                  </label>
-                  <label>
-                    Asset
-                    <input id="tradeAsset" placeholder="Apple Inc." />
-                  </label>
-                  <label>
-                    Sector
-                    <input id="tradeSector" placeholder="Technology" />
-                  </label>
-                  <label>
-                    Side
-                    <select id="tradeSide">
-                      <option value="buy">Buy</option>
-                      <option value="sell">Sell</option>
-                    </select>
-                  </label>
-                  <label>
-                    Quantity
-                    <input id="tradeQuantity" type="number" min="0" step="0.0001" />
-                  </label>
-                  <label>
-                    Trade price
-                    <input id="tradePrice" type="number" min="0" step="0.01" />
-                  </label>
-                  <label>
-                    Fees
-                    <input id="tradeFees" type="number" min="0" step="0.01" value="0" />
-                  </label>
-                  <label>
-                    Account
-                    <input id="tradeAccount" placeholder="Brokerage" />
-                  </label>
-                  <label class="wide-field">
-                    Notes
-                    <input id="tradeNotes" placeholder="Optional note" />
-                  </label>
-                </div>
-                <div class="button-row">
-                  <button class="primary-button" id="saveTradeButton" type="submit">Add trade</button>
-                  <button class="secondary-button" id="resetTradeForm" type="button">Clear form</button>
-                </div>
-              </form>
-            </article>
-
-            <article class="chart-card">
-              <div class="chart-header">
-                <div>
-                  <h2>Allocation</h2>
-                  <p class="small-muted">Based on current market value.</p>
-                </div>
-              </div>
-              <div class="chart-grid-two">
-                <div>
-                  <canvas id="portfolioAllocationChart" height="220"></canvas>
-                </div>
-                <div>
-                  <canvas id="portfolioSectorChart" height="220"></canvas>
-                </div>
-              </div>
-            </article>
-          </div>
-
-          <div class="portfolio-tables">
-            <article class="table-card">
-              <div class="section-heading">
-                <h2>Trades</h2>
-                <span class="small-muted">Edit or remove transactions directly from the app.</span>
-              </div>
-              <div class="table-shell">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Symbol</th>
-                      <th>Side</th>
-                      <th>Quantity</th>
-                      <th>Trade Price</th>
-                      <th>Fees</th>
-                      <th>Account</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="portfolioTradesTable"></tbody>
-                </table>
-              </div>
-            </article>
-
-            <article class="table-card">
-              <div class="section-heading">
-                <h2>Current Holdings</h2>
-                <span class="small-muted">Synced summary derived from the trade ledger.</span>
-              </div>
-              <div class="table-shell">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th>Account</th>
-                      <th>Sector</th>
-                      <th>Asset</th>
-                      <th>Current Price</th>
-                      <th>Trade Price / Avg Cost</th>
-                      <th>Quantity</th>
-                      <th>Initial Value</th>
-                      <th>Current Value</th>
-                      <th>Day Change</th>
-                      <th>Day % Change</th>
-                      <th>Unrealized Profit</th>
-                      <th>Realized Profit</th>
-                      <th>Allocation</th>
-                    </tr>
-                  </thead>
-                  <tbody id="portfolioHoldingsTable"></tbody>
-                </table>
-              </div>
-            </article>
-          </div>
-        </section>
       </main>
     </div>
 
-    <script src="portfolio-preload.js?v=1"></script>
-    <script src="script.js?v=7"></script>
+    <script src="script.js?v=6"></script>
     <script>
       (() => {
         function setMobileNavOpen(open) {
