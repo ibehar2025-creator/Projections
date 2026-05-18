@@ -817,72 +817,6 @@
 (function () {
   if (window.__compareAutoFetchPatchApplied) return;
   window.__compareAutoFetchPatchApplied = true;
-
-  function compareTickersReady() {
-    const a = document.getElementById("compareATicker")?.value?.trim();
-    const b = document.getElementById("compareBTicker")?.value?.trim();
-    return Boolean(a && b);
-  }
-
-  let compareFetchTimer = null;
-  let compareFetchInFlight = false;
-  let lastCompareFetchKey = "";
-
-  async function autoFetchCompare(reason = "auto") {
-    const fetchRunner =
-      window.__compareFetchRunner ||
-      window.fetchCompareTickers ||
-      (typeof fetchCompareTickers === "function" ? fetchCompareTickers : null);
-    if (!compareTickersReady() || typeof fetchRunner !== "function") return;
-    const key = [
-      document.getElementById("compareATicker")?.value?.trim()?.toUpperCase(),
-      document.getElementById("compareBTicker")?.value?.trim()?.toUpperCase(),
-    ].join("|");
-
-    if (compareFetchInFlight || (reason === "tab" && key === lastCompareFetchKey)) {
-      return;
-    }
-
-    compareFetchInFlight = true;
-    try {
-      await fetchRunner();
-      lastCompareFetchKey = key;
-    } finally {
-      compareFetchInFlight = false;
-    }
-  }
-
-  function queueCompareFetch() {
-    clearTimeout(compareFetchTimer);
-    compareFetchTimer = setTimeout(() => {
-      autoFetchCompare().catch(() => {});
-    }, 450);
-  }
-
-  const originalActivateTab = window.activateTab;
-  if (typeof originalActivateTab === "function") {
-    window.activateTab = function patchedCompareActivateTab(tabId) {
-      originalActivateTab(tabId);
-      if (tabId === "compare") {
-        autoFetchCompare("tab").catch(() => {});
-      }
-    };
-  }
-
-  ["compareATicker", "compareBTicker"].forEach((id) => {
-    const input = document.getElementById(id);
-    if (!input || input.dataset.compareAutoFetchBound) return;
-    input.dataset.compareAutoFetchBound = "true";
-    input.addEventListener("input", queueCompareFetch);
-    input.addEventListener("change", queueCompareFetch);
-    input.addEventListener("blur", queueCompareFetch);
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        autoFetchCompare("enter").catch(() => {});
-      }
-    });
-  });
 })();
 
 (function () {
@@ -905,15 +839,9 @@
   }
 
   function removeManualCompareUi() {
-    byId("fetchCompare")?.remove();
     byId("compareViewToggle")?.remove();
     byId("compareForwardBlock")?.remove();
     byId("compareHistoricalBlock")?.classList.add("active");
-
-    const actions = document.querySelector("#compare .heading-actions");
-    if (actions && !actions.children.length) {
-      actions.remove();
-    }
 
     const title = document.querySelector("#compare .results-panel .section-heading h2");
     const copy = document.querySelector("#compare .results-panel .section-heading .small-muted");
