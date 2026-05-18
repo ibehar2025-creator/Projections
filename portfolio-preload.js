@@ -78,6 +78,11 @@
   function activateHashTab() {
     const tabId = window.location.hash.replace(/^#/, "");
     if (!tabId) return;
+    if (tabId === "portfolio") {
+      history.replaceState({}, "", `${window.location.pathname}${window.location.search}#projection`);
+      activateHashTab();
+      return;
+    }
     if (typeof window.activateTab === "function") {
       window.activateTab(tabId);
       return;
@@ -87,10 +92,38 @@
   }
 
   function finishStartup() {
+    removePortfolioEntryPoints();
+    clearExampleTickerDefaults();
     activateHashTab();
     if (typeof window.runReverse === "function") window.runReverse();
     if (typeof window.runMos === "function") window.runMos();
     improveDriveButtonHelp();
+  }
+
+  function clearExampleTickerDefaults() {
+    [
+      ["ticker", "Enter ticker"],
+      ["compareATicker", "Ticker"],
+      ["compareBTicker", "Ticker"],
+      ["tradeSymbol", "Ticker"],
+      ["tradeAsset", "Asset name"],
+    ].forEach(([id, placeholder]) => {
+      const input = byId(id);
+      if (!input || input.dataset.examplesCleared === "true") return;
+      if (["AAPL", "MSFT"].includes(String(input.value || "").trim().toUpperCase())) input.value = "";
+      if (["AAPL", "MSFT", "Apple Inc."].includes(String(input.placeholder || "").trim())) input.placeholder = placeholder;
+      input.dataset.examplesCleared = "true";
+    });
+  }
+
+  function removePortfolioEntryPoints() {
+    document.querySelectorAll('[data-tab="portfolio"]').forEach((node) => node.remove());
+    const portfolioPanel = byId("portfolio");
+    if (portfolioPanel) {
+      portfolioPanel.hidden = true;
+      portfolioPanel.setAttribute("aria-hidden", "true");
+      portfolioPanel.classList.remove("active");
+    }
   }
 
   function getDriveAuthState() {
@@ -122,6 +155,7 @@
     meta.textContent = "Drive is not connected. Connect Drive first, then load your Portfolio Google Sheet.";
   }
 
+  finishStartup();
   window.addEventListener("hashchange", activateHashTab);
   window.addEventListener("DOMContentLoaded", () => {
     setTimeout(finishStartup, 0);
