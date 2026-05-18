@@ -263,7 +263,15 @@
     if (!button || !button.parentNode) return;
     const replacement = button.cloneNode(true);
     button.parentNode.replaceChild(replacement, button);
-    replacement.addEventListener("click", handler);
+    replacement.addEventListener(
+      "click",
+      (event) => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        void handler(event);
+      },
+      true,
+    );
   }
 
   function fillCompareInputs(slot, data) {
