@@ -153,14 +153,51 @@
       .join("");
   }
 
-  function buildCompareProjectionDataPatched() {
-    const years = Math.max(1, Math.min(15, Number(byId("compareYears")?.value) || 5));
+  function readCompareSnapshot() {
+    return {
+      years: Math.max(1, Math.min(15, Number(byId("compareYears")?.value) || 5)),
+      slots: {
+        A: {
+          ticker: byId("compareATicker")?.value?.trim().toUpperCase() || "STOCK A",
+          price: Number(byId("compareAPrice")?.value) || 0,
+          eps: Number(byId("compareAEps")?.value) || 0,
+          growth: (Number(byId("compareAGrowth")?.value) || 0) / 100,
+          pe: Number(byId("compareAPe")?.value) || 0,
+        },
+        B: {
+          ticker: byId("compareBTicker")?.value?.trim().toUpperCase() || "STOCK B",
+          price: Number(byId("compareBPrice")?.value) || 0,
+          eps: Number(byId("compareBEps")?.value) || 0,
+          growth: (Number(byId("compareBGrowth")?.value) || 0) / 100,
+          pe: Number(byId("compareBPe")?.value) || 0,
+        },
+      },
+    };
+  }
+
+  function applyCompareSnapshot(snapshot) {
+    if (!snapshot?.slots) return;
+    if (byId("compareYears")) byId("compareYears").value = snapshot.years;
+    ["A", "B"].forEach((slot) => {
+      const item = snapshot.slots[slot];
+      if (!item) return;
+      if (byId(`compare${slot}Ticker`)) byId(`compare${slot}Ticker`).value = item.ticker;
+      if (byId(`compare${slot}Price`)) byId(`compare${slot}Price`).value = item.price;
+      if (byId(`compare${slot}Eps`)) byId(`compare${slot}Eps`).value = item.eps;
+      if (byId(`compare${slot}Growth`)) byId(`compare${slot}Growth`).value = (item.growth * 100).toFixed(1);
+      if (byId(`compare${slot}Pe`)) byId(`compare${slot}Pe`).value = item.pe;
+    });
+  }
+
+  function buildCompareProjectionDataPatched(snapshot = readCompareSnapshot()) {
+    const years = snapshot.years;
     return ["A", "B"].map((slot, index) => {
-      const ticker = byId(`compare${slot}Ticker`)?.value?.trim().toUpperCase() || `STOCK ${slot}`;
-      const price = Number(byId(`compare${slot}Price`)?.value) || 0;
-      const eps = Number(byId(`compare${slot}Eps`)?.value) || 0;
-      const growth = (Number(byId(`compare${slot}Growth`)?.value) || 0) / 100;
-      const pe = Number(byId(`compare${slot}Pe`)?.value) || 0;
+      const source = snapshot.slots[slot] || {};
+      const ticker = source.ticker || `STOCK ${slot}`;
+      const price = Number(source.price) || 0;
+      const eps = Number(source.eps) || 0;
+      const growth = Number(source.growth) || 0;
+      const pe = Number(source.pe) || 0;
       const yearly = [];
 
       for (let year = 0; year <= years; year += 1) {
@@ -229,10 +266,70 @@
     replacement.addEventListener("click", handler);
   }
 
+  function fillCompareInputs(slot, data) {
+    if (byId(`compare${slot}Ticker`) && data?.symbol) byId(`compare${slot}Ticker`).value = data.symbol;
+    if (Number.isFinite(data?.price) && byId(`compare${slot}Price`)) byId(`compare${slot}Price`).value = data.price.toFixed(2);
+    if (Number.isFinite(data?.eps) && byId(`compare${slot}Eps`)) byId(`compare${slot}Eps`).value = data.eps.toFixed(2);
+    if (Number.isFinite(data?.peTtm) && byId(`compare${slot}Pe`)) byId(`compare${slot}Pe`).value = data.peTtm.toFixed(1);
+  }
+
   function wireCompareActions() {
     bindCompareButton("fetchCompare", async () => {
-      if (typeof fetchCompareTickers === "function") {
-        await fetchCompareTickers();
+      const button = byId("fetchCompare");
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Fetching...";
+      }
+
+      try {
+        const current = readCompareSnapshot();
+        const [a, b] = await Promise.all([
+          fetchStockData(byId("compareATicker")?.value),
+          fetchStockData(byId("compareBTicker")?.value),
+        ]);
+
+        const nextSnapshot = {
+          years: current.years,
+          slots: {
+            A: {
+              ...current.slots.A,
+              ticker: a?.symbol || current.slots.A.ticker,
+              price: Number.isFinite(a?.price) ? a.price : current.slots.A.price,
+              eps: Number.isFinite(a?.eps) ? a.eps : current.slots.A.eps,
+              pe: Number.isFinite(a?.peTtm) ? a.peTtm : current.slots.A.pe,
+            },
+            B: {
+              ...current.slots.B,
+              ticker: b?.symbol || current.slots.B.ticker,
+              price: Number.isFinite(b?.price) ? b.price : current.slots.B.price,
+              eps: Number.isFinite(b?.eps) ? b.eps : current.slots.B.eps,
+              pe: Number.isFinite(b?.peTtm) ? b.peTtm : current.slots.B.pe,
+            },
+          },
+        };
+
+        applyCompareSnapshot(nextSnapshot);
+
+        if (typeof loadCompareHistoricalChart === "function") {
+          await loadCompareHistoricalChart(appState.compareHistoryRange || "5y");
+        }
+        if (typeof setDataStatus === "function") {
+          setDataStatus("Compare data loaded");
+        }
+        const result = buildCompareProjectionDataPatched(nextSnapshot);
+        appState.compareForward = result;
+        renderCompareCards(result);
+        drawCombinedCompareChart();
+      } catch (error) {
+        if (typeof setDataStatus === "function") {
+          setDataStatus("Compare fetch failed");
+        }
+        alert(error.message || "Could not fetch compare data.");
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = "Fetch A & B";
+        }
       }
     });
 
