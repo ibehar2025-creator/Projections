@@ -1,0 +1,63 @@
+#projection .results-panel .section-heading {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+#projection .results-panel .section-heading .small-muted {
+  margin-left: auto;
+  max-width: 26ch;
+  text-align: right;
+  line-height: 1.45;
+}
+
+#projection .scenario-table-wrap {
+  margin-top: 6px;
+  margin-bottom: 18px;
+}
+
+#projection .button-row {
+  margin-top: 4px;
+  row-gap: 10px;
+}
+
+#projection #projectionCards {
+  margin-top: 4px;
+  gap: 14px;
+}
+
+#projection #projectionDetails {
+  margin-top: 2px;
+  gap: 14px;
+}
+
+#projection .metric-card,
+#projection .detail-card {
+  min-height: 100%;
+}
+
+#projection .metric-card strong {
+  margin: 10px 0 8px;
+}
+
+#projection .metric-card p {
+  line-height: 1.55;
+}
+
+@media (max-width: 900px) {
+  #projection .results-panel .section-heading .small-muted {
+    margin-left: 0;
+    max-width: none;
+    text-align: left;
+  }
+}
+
+@media (max-width: 760px) {
+  #projection .scenario-table-wrap {
+    margin-bottom: 14px;
+  }
+
+  #projection .button-row {
+    margin-top: 0;
+  }
+}
