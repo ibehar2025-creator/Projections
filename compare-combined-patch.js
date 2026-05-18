@@ -153,14 +153,46 @@
       .join("");
   }
 
-  const originalRunCompare = typeof window.runCompare === "function" ? window.runCompare : null;
-  if (originalRunCompare) {
-    const patchedRunCompare = function patchedRunCompare() {
-      const result = typeof buildCompareProjectionData === "function" ? buildCompareProjectionData() : originalRunCompare();
-      appState.compareForward = Array.isArray(result) ? result : appState.compareForward;
-      if (Array.isArray(appState.compareForward)) {
-        renderCompareCards(appState.compareForward);
+  function buildCompareProjectionDataPatched() {
+    const years = Math.max(1, Math.min(15, Number(byId("compareYears")?.value) || 5));
+    return ["A", "B"].map((slot, index) => {
+      const ticker = byId(`compare${slot}Ticker`)?.value?.trim().toUpperCase() || `STOCK ${slot}`;
+      const price = Number(byId(`compare${slot}Price`)?.value) || 0;
+      const eps = Number(byId(`compare${slot}Eps`)?.value) || 0;
+      const growth = (Number(byId(`compare${slot}Growth`)?.value) || 0) / 100;
+      const pe = Number(byId(`compare${slot}Pe`)?.value) || 0;
+      const yearly = [];
+
+      for (let year = 0; year <= years; year += 1) {
+        const futureEps = eps * Math.pow(1 + growth, year);
+        const futurePrice = futureEps * pe;
+        yearly.push({
+          x: year,
+          y: futurePrice,
+          year,
+          price: futurePrice,
+        });
       }
+
+      const terminal = yearly[yearly.length - 1]?.price || 0;
+      return {
+        key: slot,
+        label: ticker,
+        color: index === 0 ? "#4f8cff" : "#3ecf8e",
+        yearly,
+        terminal,
+        cagr: price > 0 && terminal > 0 ? Math.pow(terminal / price, 1 / years) - 1 : 0,
+        returnMultiple: price > 0 ? terminal / price : 0,
+        currentPrice: price,
+      };
+    });
+  }
+
+  if (typeof window.runCompare === "function") {
+    const patchedRunCompare = function patchedRunCompare() {
+      const result = buildCompareProjectionDataPatched();
+      appState.compareForward = result;
+      renderCompareCards(result);
       drawCombinedCompareChart();
       return result;
     };
