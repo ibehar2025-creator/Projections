@@ -6,6 +6,51 @@
     return document.getElementById(id);
   }
 
+  function clearExampleTickerUi() {
+    [
+      ["ticker", "Enter ticker"],
+      ["compareATicker", "Ticker"],
+      ["compareBTicker", "Ticker"],
+    ].forEach(([id, placeholder]) => {
+      const input = byId(id);
+      if (!input) return;
+      const current = String(input.value || "").trim().toUpperCase();
+      const attrValue = String(input.getAttribute("value") || "").trim().toUpperCase();
+      const attrPlaceholder = String(input.getAttribute("placeholder") || "").trim().toUpperCase();
+      if (["AAPL", "MSFT"].includes(current) || ["AAPL", "MSFT"].includes(attrValue)) {
+        input.value = "";
+        input.defaultValue = "";
+        input.removeAttribute("value");
+      }
+      if (["AAPL", "MSFT"].includes(attrPlaceholder)) {
+        input.placeholder = placeholder;
+        input.setAttribute("placeholder", placeholder);
+      }
+    });
+
+    const stockCard = byId("stockDataCard");
+    if (stockCard && /AAPL|MSFT|Apple|Microsoft/i.test(stockCard.textContent || "")) {
+      stockCard.innerHTML = "<strong>Live data not loaded yet.</strong><p>Enter a ticker and fetch market data to fill the projection inputs automatically.</p>";
+    }
+
+    const projectionCards = byId("projectionCards");
+    const projectionDetails = byId("projectionDetails");
+    if (projectionCards && /AAPL|MSFT|Apple|Microsoft/i.test(projectionCards.textContent || "")) projectionCards.innerHTML = "";
+    if (projectionDetails && /AAPL|MSFT|Apple|Microsoft/i.test(projectionDetails.textContent || "")) projectionDetails.innerHTML = "";
+
+    const compareCards = byId("compareCards");
+    if (compareCards && /AAPL|MSFT|Apple|Microsoft/i.test(compareCards.textContent || "")) compareCards.innerHTML = "";
+
+    const compareHistoricalReadout = byId("compareHistoricalReadout");
+    const compareForwardReadout = byId("compareForwardReadout");
+    if (compareHistoricalReadout && /AAPL|MSFT|Apple|Microsoft/i.test(compareHistoricalReadout.textContent || "")) {
+      compareHistoricalReadout.textContent = "Enter two tickers and fetch A & B to load the comparison.";
+    }
+    if (compareForwardReadout && /AAPL|MSFT|Apple|Microsoft/i.test(compareForwardReadout.textContent || "")) {
+      compareForwardReadout.textContent = "Forward comparison details will appear here.";
+    }
+  }
+
   function bindProjectionFetch() {
     const button = byId("fetchTicker");
     if (!button || !button.parentNode) return;
@@ -53,6 +98,9 @@
     );
   }
 
+  clearExampleTickerUi();
   bindProjectionFetch();
+  setTimeout(clearExampleTickerUi, 0);
   setTimeout(bindProjectionFetch, 0);
+  setTimeout(clearExampleTickerUi, 500);
 })();
