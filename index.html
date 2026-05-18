@@ -11,7 +11,7 @@
       rel="stylesheet"
     />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-    <link rel="stylesheet" href="styles.css?v=8" />
+    <link rel="stylesheet" href="styles.css?v=9" />
     <link rel="stylesheet" href="spacing-tune-patch.css?v=2" />
     <style>
       .two-col,
@@ -424,66 +424,8 @@
     </div>
 
     <script src="qa-hardening-patch.js?v=1"></script>
-    <script src="script.js?v=8"></script>
-    <script>
-      (() => {
-        function setMobileNavOpen(open) {
-          const menuToggle = document.getElementById("menuToggle");
-          const mobileNav = document.getElementById("mobileNav");
-          const backdrop = document.getElementById("mobileNavBackdrop");
-          if (!menuToggle || !mobileNav || !backdrop) return;
-          menuToggle.setAttribute("aria-expanded", open ? "true" : "false");
-          mobileNav.hidden = !open;
-          backdrop.hidden = !open;
-        }
-
-        function syncMobileActiveState(tabId) {
-          document.querySelectorAll(".mobile-nav-link").forEach((tab) => {
-            tab.classList.toggle("active", tab.dataset.tab === tabId);
-          });
-        }
-
-        const originalActivateTab = window.activateTab;
-        if (typeof originalActivateTab === "function") {
-          window.activateTab = function patchedActivateTab(tabId) {
-            originalActivateTab(tabId);
-            syncMobileActiveState(tabId);
-            setMobileNavOpen(false);
-          };
-        }
-
-        function bindMobileNav() {
-          const activeDesktopTab = document.querySelector(".tab.active")?.dataset.tab || "projection";
-          syncMobileActiveState(activeDesktopTab);
-
-          document.querySelectorAll(".mobile-nav-link").forEach((button) => {
-            button.addEventListener("click", () => {
-              if (typeof window.activateTab === "function") {
-                window.activateTab(button.dataset.tab);
-              }
-            });
-          });
-
-          document.getElementById("menuToggle")?.addEventListener("click", () => {
-            const open = document.getElementById("menuToggle")?.getAttribute("aria-expanded") === "true";
-            setMobileNavOpen(!open);
-          });
-
-          document.getElementById("mobileNavBackdrop")?.addEventListener("click", () => setMobileNavOpen(false));
-          document.addEventListener("keydown", (event) => {
-            if (event.key === "Escape") {
-              setMobileNavOpen(false);
-            }
-          });
-        }
-
-        if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", bindMobileNav, { once: true });
-        } else {
-          bindMobileNav();
-        }
-      })();
-    </script>
+    <script src="script.js?v=9"></script>
+    <script src="mobile-nav-patch.js?v=1"></script>
     <script src="projection-chart-patch.js?v=3"></script>
     <script src="compare-combined-patch.js?v=4"></script>
     <script src="projection-fetch-patch.js?v=3"></script>
