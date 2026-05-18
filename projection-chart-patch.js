@@ -115,7 +115,8 @@
             y: point.price,
           })),
         ],
-        pointRadius: 2,
+        pointRadius: 0,
+        pointHitRadius: 18,
         pointHoverRadius: 4,
         borderWidth: item.key === "base" ? 2.8 : 2.2,
         fill: false,
@@ -917,7 +918,8 @@
           backgroundColor: `${color}1f`,
           borderDash: [8, 5],
           data: projectionSeries,
-          pointRadius: 3,
+          pointRadius: 0,
+          pointHitRadius: 18,
           pointHoverRadius: 5,
           borderWidth: 2.8,
         },
@@ -954,10 +956,27 @@
     );
   }
 
+  function renderCompareCards(stocks) {
+    const compareCards = byId("compareCards");
+    if (!compareCards) return;
+    compareCards.innerHTML = stocks
+      .map(
+        (stock) => `
+          <article class="metric-card">
+            <span>${stock.label}</span>
+            <strong>${formatDollarValue(stock.terminal)}</strong>
+            <p>${formatPercent(stock.cagr)} annualized, ${stock.returnMultiple.toFixed(2)}x ending value</p>
+          </article>
+        `,
+      )
+      .join("");
+  }
+
   if (typeof runCompare === "function") {
-    const originalRunCompare = runCompare;
     safeCompareRun = function patchedRunCompare() {
-      const result = originalRunCompare.apply(this, arguments);
+      const result = typeof buildCompareProjectionData === "function" ? buildCompareProjectionData() : [];
+      appState.compareForward = result;
+      renderCompareCards(result);
       drawCombinedCompareChart();
       return result;
     };
@@ -978,6 +997,11 @@
 
   if (typeof fetchCompareTickers === "function") {
     safeCompareFetch = async function patchedFetchCompareTickers() {
+      const button = byId("fetchCompare");
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Fetching...";
+      }
       try {
         const [a, b] = await Promise.all([
           fetchStockData(byId("compareATicker")?.value),
@@ -991,12 +1015,27 @@
         (safeCompareRun || runCompare)();
       } catch (error) {
         setDataStatus("Compare fetch failed");
-        throw error;
+        alert(error.message || "Could not fetch compare data.");
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = "Fetch A & B";
+        }
       }
     };
     window.__compareFetchRunner = safeCompareFetch;
     fetchCompareTickers = safeCompareFetch;
     window.fetchCompareTickers = safeCompareFetch;
+  }
+
+  function rebindCompareFetchButton() {
+    const oldButton = byId("fetchCompare");
+    if (!oldButton || !oldButton.parentNode) return;
+    const newButton = oldButton.cloneNode(true);
+    oldButton.parentNode.replaceChild(newButton, oldButton);
+    newButton.addEventListener("click", () => {
+      (safeCompareFetch || fetchCompareTickers)();
+    });
   }
 
   if (typeof toggleCompareView === "function") {
@@ -1009,5 +1048,6 @@
   }
 
   removeManualCompareUi();
+  rebindCompareFetchButton();
   setTimeout(removeManualCompareUi, 0);
 })();
