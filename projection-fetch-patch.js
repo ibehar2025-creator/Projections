@@ -19,6 +19,88 @@
     if (readout) readout.textContent = message;
   }
 
+  function addYearsToDate(baseValue, years) {
+    const date = new Date(baseValue);
+    const copy = new Date(date.getTime());
+    copy.setFullYear(copy.getFullYear() + years);
+    return copy.getTime();
+  }
+
+  function toTimestamp(value) {
+    if (typeof value === "number") return value;
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : Date.now();
+  }
+
+  function installProjectionHistoryFallback() {
+    if (typeof globalThis.drawProjectionUnifiedChart === "function") return;
+
+    globalThis.drawProjectionUnifiedChart = function drawProjectionUnifiedChartFallback(result, history) {
+      const lastHistoryPoint = history?.points?.[history.points.length - 1];
+      if (!lastHistoryPoint || typeof createLineChart !== "function") {
+        if (typeof drawProjectionForwardChart === "function") drawProjectionForwardChart(result);
+        return;
+      }
+
+      const anchorDate = toTimestamp(lastHistoryPoint.date);
+      const anchorPrice = Number.isFinite(lastHistoryPoint.close) ? lastHistoryPoint.close : result.input.currentPrice;
+      const datasets = [
+        {
+          label: `${history.symbol} history`,
+          borderColor: "#4f8cff",
+          backgroundColor: "rgba(79, 140, 255, 0.14)",
+          data: history.points.map((point) => ({ x: toTimestamp(point.date), y: Number(point.close) || 0 })),
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          borderWidth: 2.4,
+          fill: false,
+        },
+        ...result.cases.map((item) => ({
+          label: `${item.label} outlook`,
+          borderColor: item.color,
+          backgroundColor: `${item.color}22`,
+          borderDash: item.key === "base" ? [] : [7, 5],
+          data: [
+            { x: anchorDate, y: anchorPrice },
+            ...item.yearly.slice(1).map((point) => ({
+              x: addYearsToDate(anchorDate, point.year),
+              y: point.price,
+            })),
+          ],
+          pointRadius: 2,
+          pointHoverRadius: 4,
+          borderWidth: item.key === "base" ? 2.8 : 2.2,
+          fill: false,
+        })),
+      ];
+
+      const chart = createLineChart("projectionForward", "projectionForwardChart", {
+        readoutId: "projectionForwardReadout",
+        xFormatter: (value) => formatDate(value),
+        xTime: true,
+        mode: "measure",
+        datasets,
+      });
+
+      if (chart?.options?.scales?.x) {
+        chart.options.scales.x.type = "time";
+        chart.options.scales.x.time = {
+          unit: "year",
+          tooltipFormat: "MMM d, yyyy",
+          displayFormats: {
+            month: "MMM yyyy",
+            year: "yyyy",
+          },
+        };
+        chart.options.scales.y.title = { display: true, text: "Share price" };
+        chart.update("none");
+      }
+
+      const rangeLabel = String(history.rangeLabel || history.range || "selected range").toUpperCase();
+      setProjectionReadout(`${history.symbol} ${rangeLabel} history and forward scenarios loaded on one timeline.`);
+    };
+  }
+
   function clearExampleTickerUi() {
     [
       ["ticker", "Enter ticker"],
@@ -166,6 +248,7 @@
   }
 
   function bootstrapProjectionPatch() {
+    installProjectionHistoryFallback();
     clearExampleTickerUi();
     bindProjectionRun();
     bindProjectionFetch();
