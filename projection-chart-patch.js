@@ -884,6 +884,10 @@
   if (window.__compareUnifiedChartPatchApplied) return;
   window.__compareUnifiedChartPatchApplied = true;
 
+  let safeCompareFetch = null;
+  let safeCompareRun = null;
+  let safeCompareHistoryLoad = null;
+
   function byId(id) {
     return document.getElementById(id);
   }
@@ -1005,26 +1009,30 @@
     );
   }
 
-  if (typeof window.runCompare === "function") {
-    const originalRunCompare = window.runCompare;
-    window.runCompare = function patchedRunCompare() {
+  if (typeof runCompare === "function") {
+    const originalRunCompare = runCompare;
+    safeCompareRun = function patchedRunCompare() {
       const result = originalRunCompare.apply(this, arguments);
       drawCombinedCompareChart();
       return result;
     };
+    runCompare = safeCompareRun;
+    window.runCompare = safeCompareRun;
   }
 
-  if (typeof window.loadCompareHistoricalChart === "function") {
-    const originalLoadCompareHistoricalChart = window.loadCompareHistoricalChart;
-    window.loadCompareHistoricalChart = async function patchedLoadCompareHistoricalChart(range = "5y") {
+  if (typeof loadCompareHistoricalChart === "function") {
+    const originalLoadCompareHistoricalChart = loadCompareHistoricalChart;
+    safeCompareHistoryLoad = async function patchedLoadCompareHistoricalChart(range = "5y") {
       const result = await originalLoadCompareHistoricalChart.apply(this, arguments);
       drawCombinedCompareChart();
       return result;
     };
+    loadCompareHistoricalChart = safeCompareHistoryLoad;
+    window.loadCompareHistoricalChart = safeCompareHistoryLoad;
   }
 
-  if (typeof window.fetchCompareTickers === "function") {
-    window.fetchCompareTickers = async function patchedFetchCompareTickers() {
+  if (typeof fetchCompareTickers === "function") {
+    safeCompareFetch = async function patchedFetchCompareTickers() {
       try {
         const [a, b] = await Promise.all([
           fetchStockData(byId("compareATicker")?.value),
@@ -1033,21 +1041,25 @@
 
         fillCompareSlot("A", a);
         fillCompareSlot("B", b);
-        await loadCompareHistoricalChart(appState.compareHistoryRange);
+        await (safeCompareHistoryLoad || loadCompareHistoricalChart)(appState.compareHistoryRange);
         setDataStatus("Compare data loaded");
-        runCompare();
+        (safeCompareRun || runCompare)();
       } catch (error) {
         setDataStatus("Compare fetch failed");
         throw error;
       }
     };
+    fetchCompareTickers = safeCompareFetch;
+    window.fetchCompareTickers = safeCompareFetch;
   }
 
-  if (typeof window.toggleCompareView === "function") {
-    window.toggleCompareView = function patchedToggleCompareView() {
+  if (typeof toggleCompareView === "function") {
+    const patchedToggleCompareView = function patchedToggleCompareView() {
       byId("compareHistoricalBlock")?.classList.add("active");
       resizeVisibleCharts();
     };
+    toggleCompareView = patchedToggleCompareView;
+    window.toggleCompareView = patchedToggleCompareView;
   }
 
   removeManualCompareUi();
